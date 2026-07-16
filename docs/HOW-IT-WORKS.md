@@ -48,17 +48,32 @@ Every script has a `--self-test`; CI runs them all.
 
 ## Reading the readout
 
+The default style is `minimal` — quota is invisible until it matters:
+
+```
+opus-4.8 high · ~/projects                                  (all quiet)
+opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
+```
+
+- Model + effort in the accent color, working directory in gray.
+- Below `statusline_show_pct` (default 75) on both providers: no numbers at
+  all. The moment either crosses it, both providers' most-pressured windows
+  appear — your usage and the alternative, in one glance.
+- Percentages go yellow at the show threshold, red + bold past the window's
+  own gate (85% for 5-hour windows, 75% for weekly).
+- The countdown appears when the reset is near enough to be actionable
+  (within 8 hours) — a weekly window days from reset shows just the number.
+- `~` means the number is stale; `--` means unknown.
+- A leading `⏾` means a capped session is hibernating.
+
+The always-on gauge styles (`statusline_style: braille`, `circles`, or
+`plain`) show every window all the time instead:
+
 ```
 Claude 5h ⣿88%!(34m) / 7d ⣧71% · Codex wk ⡄19%
 ```
 
-- The glyph is the fill level — braille ramp by default, `○◔◑◕●` with
-  `statusline_style: circles`, or `plain` for numbers only.
-- Colors: yellow within 10 points of a window's own threshold, red + bold
-  past it.
-- `!` marks a binding window, with a countdown to its reset.
-- `~` means the number is stale; `--` means unknown.
-- A leading `⏾` means a capped session is hibernating.
+Run `statusline.py --demo` to see the styles rendered in your own terminal.
 
 ## The routing policy, in short
 
@@ -111,8 +126,10 @@ the window caps out, the session stops and waits for you. With
 | `fivehour_soft_pct` | 85 | 5-hour usage + launch reserve above this → constrained |
 | `claude_cache_ttl_seconds` | 90 | Claude numbers older than this (and absent from the latest tick) count as stale |
 | `codex_old_snapshot_seconds` | 1800 | Codex snapshots older than this get the `~` marker |
-| `statusline_style` | braille | `braille`, `circles`, or `plain` |
-| `statusline_color` | true | ANSI color zones on the readout |
+| `statusline_style` | minimal | `minimal`, `braille`, `circles`, or `plain` |
+| `statusline_color` | true | ANSI colors on the readout |
+| `statusline_show_pct` | 75 | minimal style: hide quota below this, show both providers at it |
+| `statusline_accent` | #D97757 | minimal style: hex color for the model name |
 | `hibernate_enabled` | false | Opt-in auto-resume after a usage-limit stop |
 | `hibernate_settle_seconds` | 90 | Extra wait past the reset before resuming |
 | `hibernate_max_wait_hours` | 12 | Never hibernate longer than this |

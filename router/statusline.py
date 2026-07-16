@@ -56,7 +56,7 @@ def _extract_claude_windows(payload, now):
     return out
 
 
-def _update_cache(new_windows, now, cache_dir):
+def _update_cache(new_windows, now, cache_dir, meta=None):
     """Read-modify-write the cache under an flock. Carry forward windows absent
     from this tick; never replace a stored window with an older observation."""
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
@@ -67,6 +67,11 @@ def _update_cache(new_windows, now, cache_dir):
         if not isinstance(cache, dict):
             cache = {}
         merged = {}
+        stored_meta = cache.get("meta") if isinstance(cache.get("meta"), dict) else {}
+        if isinstance(meta, dict):
+            stored_meta = dict(stored_meta, **{k: v for k, v in meta.items() if v})
+        if stored_meta:
+            merged["meta"] = stored_meta
         for key in ("five_hour", "seven_day"):
             incoming = new_windows.get(key)
             stored = cache.get(key) if isinstance(cache.get(key), dict) else None
@@ -178,7 +183,108 @@ def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr, style="plain", color_
     return "Codex " + (" ".join(parts) if parts else "--")
 
 
-def _render(cache, config, now):
+def _hex_to_ansi(hexstr):
+    try:
+        h = str(hexstr).lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"\033[38;2;{r};{g};{b}m"
+    except Exception:
+        return ""
+
+
+def _effort():
+    s = _load_json(os.path.join(HOME, ".claude", "settings.json"), {})
+    e = s.get("effortLevel")
+    return e if isinstance(e, str) and e else None
+
+
+def _render_minimal(cache, config, now, payload):
+    """`opus-4.8 high · ~/projects` — quota is invisible until a provider
+    crosses statusline_show_pct; then both providers' numbers appear, with a
+    reset countdown when the reset is near enough to be actionable."""
+    color_on = bool(config.get("statusline_color", True))
+    show_thr = config.get("statusline_show_pct", 75)
+    weekly_thr = config.get("weekly_protect_pct", 75)
+    five_thr = config.get("fivehour_soft_pct", 85)
+    ttl = config.get("claude_cache_ttl_seconds", 90)
+    old_secs = config.get("codex_old_snapshot_seconds", 1800)
+    GRAY, WHITE = "\033[90m", "\033[97m"
+    accent = _hex_to_ansi(config.get("statusline_accent", "#D97757"))
+
+    def c(code, text):
+        return f"{code}{text}{RESET}" if color_on and code else text
+
+    meta = {}
+    if isinstance(payload, dict):
+        m = payload.get("model") or {}
+        ws = payload.get("workspace") or {}
+        meta = {"model": m.get("display_name") or m.get("id"),
+                "cwd": ws.get("current_dir") or payload.get("cwd")}
+    stored = cache.get("meta") if isinstance(cache.get("meta"), dict) else {}
+    model = str(meta.get("model") or stored.get("model") or "claude")
+    model = model.lower().replace("claude-", "").replace(" ", "-")
+    effort = _effort()
+    head = model + (f" {effort}" if effort else "")
+    cwd = str(meta.get("cwd") or stored.get("cwd") or "")
+    if cwd.startswith(HOME):
+        cwd = "~" + cwd[len(HOME):]
+
+    def claude_pick():
+        best = None
+        for key, thr in (("five_hour", five_thr), ("seven_day", weekly_thr)):
+            w = cache.get(key)
+            if not isinstance(w, dict) or not isinstance(w.get("used_percentage"), (int, float)):
+                continue
+            stale = (not w.get("present_in_latest_payload", False)
+                     and now - w.get("observed_at", 0) > ttl)
+            mtr = (w["resets_at"] - now) / 60 \
+                if isinstance(w.get("resets_at"), (int, float)) else None
+            if best is None or w["used_percentage"] > best[0]:
+                best = (w["used_percentage"], thr, mtr, stale)
+        return best
+
+    probe = _load_json_from_probe()
+
+    def codex_pick():
+        if not probe.get("available"):
+            return None
+        best = None
+        for role, thr in (("short", five_thr), ("long", weekly_thr)):
+            w = probe.get("windows", {}).get(role, {})
+            if not w.get("present") or not w.get("routing_available", True):
+                continue
+            stale = probe.get("snapshot_age_seconds", 0) > old_secs
+            if best is None or w["used_percent"] > best[0]:
+                best = (w["used_percent"], thr, w.get("minutes_to_reset"), stale)
+        return best
+
+    def pct_str(pick):
+        used, thr, mtr, stale = pick
+        txt = f"{int(round(used))}%" + ("~" if stale else "")
+        if isinstance(mtr, (int, float)) and 0 < mtr <= 480:
+            txt += " " + _fmt_reset_suffix(mtr)
+        code = RED if used > thr else (YELLOW if used >= show_thr else "")
+        return c(code, txt)
+
+    cl, cx = claude_pick(), codex_pick()
+    constrained = (cl and cl[0] >= show_thr) or (cx and cx[0] >= show_thr)
+
+    parts = []
+    if constrained:
+        parts.append(c(accent, head) + " " + pct_str(cl) if cl else c(accent, head))
+        parts.append(c(WHITE, "codex") + " " + (pct_str(cx) if cx else "--"))
+    else:
+        parts.append(c(accent, head))
+    if cwd:
+        parts.append(c(GRAY, cwd))
+    prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
+    return prefix + c(GRAY, " · ").join(parts) if color_on \
+        else prefix + " · ".join(parts)
+
+
+def _render(cache, config, now, payload=None):
+    if config.get("statusline_style") == "minimal":
+        return _render_minimal(cache, config, now, payload)
     ttl = config.get("claude_cache_ttl_seconds", 90)
     old_secs = config.get("codex_old_snapshot_seconds", 1800)
     weekly_thr = config.get("weekly_protect_pct", 75)
@@ -246,12 +352,18 @@ def main():
     payload = _load_json_from_str(raw)
     config = _load_json(CONFIG, {})
     cache_dir = os.path.dirname(CACHE)
+    meta = None
+    if isinstance(payload, dict):
+        m = payload.get("model") or {}
+        ws = payload.get("workspace") or {}
+        meta = {"model": m.get("display_name") or m.get("id"),
+                "cwd": ws.get("current_dir") or payload.get("cwd")}
     try:
         windows = _extract_claude_windows(payload, now)
-        cache = _update_cache(windows, now, cache_dir)
+        cache = _update_cache(windows, now, cache_dir, meta)
     except Exception:
         cache = _load_json(CACHE, {})  # degrade: still render from last cache
-    readout = _render(cache, config, now)
+    readout = _render(cache, config, now, payload)
     prev_line = _maybe_wrap_previous(config, raw)
     sys.stdout.write((prev_line + "  " if prev_line else "") + readout)
     return 0
@@ -370,6 +482,71 @@ def _self_test():
             _load_json_from_probe = saved
             HIBERNATE_MARKER = saved_marker
         check("hibernate_prefix", line4.startswith("⏾ "))
+
+        # ---- minimal style ----
+        global _effort
+        saved_eff = _effort
+        _effort = lambda: "high"
+        cfgm = {"statusline_style": "minimal", "statusline_color": True,
+                "weekly_protect_pct": 75, "fivehour_soft_pct": 85,
+                "claude_cache_ttl_seconds": 90}
+        payload = {"model": {"display_name": "Opus 4.8"},
+                   "workspace": {"current_dir": HOME + "/projects"}}
+        codex_low = lambda: {"available": True, "snapshot_age_seconds": 5, "windows": {
+            "short": {"present": False},
+            "long": {"present": True, "routing_available": True,
+                     "used_percent": 15.0, "minutes_to_reset": 6000}}}
+        codex_hot = lambda: {"available": True, "snapshot_age_seconds": 5, "windows": {
+            "short": {"present": True, "routing_available": True,
+                      "used_percent": 82.0, "minutes_to_reset": 162},
+            "long": {"present": False}}}
+
+        low = {"five_hour": {"used_percentage": 40, "observed_at": now,
+                             "present_in_latest_payload": True, "resets_at": now + 3600},
+               "seven_day": {"used_percentage": 30, "observed_at": now,
+                             "present_in_latest_payload": True, "resets_at": now + 500000}}
+        _load_json_from_probe = codex_low
+        try:
+            lm = _render(low, cfgm, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("minimal_quiet", "opus-4.8 high" in lm and "~/projects" in lm
+              and "%" not in lm and "codex" not in lm)
+
+        hot = {"five_hour": {"used_percentage": 76, "observed_at": now,
+                             "present_in_latest_payload": True, "resets_at": now + 130 * 60},
+               "seven_day": {"used_percentage": 30, "observed_at": now,
+                             "present_in_latest_payload": True, "resets_at": now + 500000}}
+        _load_json_from_probe = codex_hot
+        try:
+            lh = _render(hot, cfgm, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("minimal_constrained", "76% (2h10m)" in lh
+              and "codex" in lh and "82% (2h42m)" in lh)
+        check("minimal_yellow_not_red", YELLOW + "76%" in lh
+              and YELLOW + "82%" in lh and RED not in lh)
+
+        red_cache = dict(hot, five_hour=dict(hot["five_hour"], used_percentage=91))
+        _load_json_from_probe = codex_low
+        try:
+            lr = _render(red_cache, cfgm, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("minimal_red_past_threshold", RED + "91%" in lr and "codex" in lr)
+
+        # weekly binding far from reset: pct shown, no countdown on the claude part
+        wk = {"seven_day": {"used_percentage": 78, "observed_at": now,
+                            "present_in_latest_payload": True, "resets_at": now + 5000 * 60},
+              "five_hour": {"used_percentage": 10, "observed_at": now,
+                            "present_in_latest_payload": True, "resets_at": now + 3600}}
+        _load_json_from_probe = codex_low
+        try:
+            lw = _render(wk, cfgm, now, payload)
+        finally:
+            _load_json_from_probe = saved
+            _effort = saved_eff
+        check("minimal_no_far_countdown", "78%" in lw and "(" not in lw)
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1

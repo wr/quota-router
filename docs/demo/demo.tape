@@ -1,6 +1,6 @@
 Output ../demo.gif
 Set FontSize 26
-Set Width 1020
+Set Width 1220
 Set Height 230
 Set Padding 20
 Hide

@@ -10,9 +10,10 @@ You pay for two AI subscriptions. Each has its own rate windows, neither tool
 can see the other's, and the model deciding where your subagents run can't see
 either. quota-router fixes the three ways that bites you:
 
-- **Both pools at a glance.** Claude's 5-hour and weekly windows plus Codex's,
-  in your Claude Code status line — fill glyphs with exact numbers, yellow as
-  a window approaches its threshold, red with a reset countdown once it binds.
+- **A status line that stays out of the way.** `opus-4.8 high · ~/projects`
+  and nothing else — until a provider crosses 75%, when both pools' numbers
+  appear with a reset countdown, yellow first, red past the gate. (Prefer
+  always-on gauges? Braille and circle styles are one config key away.)
 - **Work lands where the headroom is.** Every subagent launch gets the live
   numbers injected at decision time, and a routing policy puts the work where
   it fits: protect the weekly cap (the one that ruins your week), drop a tier
@@ -48,8 +49,8 @@ python3 ~/.claude/quota-router/statusline.py --demo
 
 ## Make it yours
 
-Thresholds, glyph style (`braille` / `circles` / `plain`), color, and
-hibernate live in `~/.claude/quota-router/config.json`. The model tier tables
+Thresholds, status-line style (`minimal` / `braille` / `circles` / `plain`),
+accent color, and hibernate live in `~/.claude/quota-router/config.json`. The model tier tables
 live in the skill and name the models my plans expose — edit them to match
 yours; the gates don't care what the tiers are called. Hibernate is off by
 default because a script that types into your terminal should be something
