@@ -53,7 +53,7 @@ def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, ho
 
 FRAMES = [
     ("quiet: model + repo state, in the repo's theme color",
-     MOJITO_GREEN, "􀐞 mojito 􀜞", 42, 15, 200, 6000, False, 3.2),
+     MOJITO_GREEN, "􀐞 mojito 􀜞 main", 42, 15, 200, 6000, False, 3.2),
     ("another repo, its own accent -- on a branch, uncommitted changes",
      SHOP_INDIGO, "􀐞 shop 􀫲 pay-links", 58, 16, 170, 6000, False, 3.2),
     ("5-hour window crosses 75%: both pools appear",

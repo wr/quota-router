@@ -314,17 +314,15 @@ def _git_segment(cwd, config):
         state = sym["main_dirty"] if on_main else sym["branch_dirty"]
     else:
         state = sym["main_clean"] if on_main else sym["branch_clean"]
-    seg = f"{sym['repo']} {os.path.basename(top)} {state}"
-    if not on_main:
-        seg += f" {branch}"
-        num = pr.get("number") if isinstance(pr, dict) else None
-        if prstate and num:
-            tag = f"#{num}"
-            url = pr.get("url")
-            if url:
-                # OSC 8 hyperlink; terminals without support just show the text
-                tag = f"\033]8;;{url}\033\\{tag}\033]8;;\033\\"
-            seg += f" {tag}"
+    seg = f"{sym['repo']} {os.path.basename(top)} {state} {branch}"
+    num = pr.get("number") if isinstance(pr, dict) else None
+    if prstate and num:
+        tag = f"#{num}"
+        url = pr.get("url")
+        if url:
+            # OSC 8 hyperlink; terminals without support just show the text
+            tag = f"\033]8;;{url}\033\\{tag}\033]8;;\033\\"
+        seg += f" {tag}"
     return seg
 
 
@@ -782,10 +780,10 @@ def _self_test():
         git("add", "a.txt")
         git("commit", "-qm", "init")
         try:
-            check("git_main_clean", _git_segment(repo, cfgg) == "􀐞 myrepo 􀜞")
+            check("git_main_clean", _git_segment(repo, cfgg) == "􀐞 myrepo 􀜞 main")
             with open(os.path.join(repo, "a.txt"), "w") as f:
                 f.write("y")
-            check("git_main_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀧙")
+            check("git_main_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀧙 main")
             git("checkout", "-qb", "feat")
             check("git_branch_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀫲 feat")
             git("commit", "-aqm", "wip")
