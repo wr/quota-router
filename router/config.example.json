@@ -6,6 +6,7 @@
   "decision_horizon_minutes": 90,
   "weekly_protect_pct": 75,
   "fivehour_soft_pct": 85,
+  "fivehour_conserve_pct": 50,
   "statusline_style": "minimal",
   "statusline_color": true,
   "statusline_show_pct": 75,
@@ -17,6 +18,7 @@
   "previous_statusline": null,
   "test_override": null,
   "_notes": {
+    "fivehour_conserve_pct": "Soft band below the hard gate: at/above this, delegation targets shift to Codex/Haiku for standard+mechanical work so the Claude window is saved for what needs Claude.",
     "statusline_style": "minimal | braille | circles | plain. minimal shows `model effort · cwd` and reveals both providers' numbers only when one crosses statusline_show_pct; the others always show glyph+percentage gauges.",
     "statusline_color": "ANSI colors. minimal: accent on the model, gray path, yellow/red percentages. Gauges: yellow within 10 points of a window's threshold, red+bold past it.",
     "statusline_show_pct": "minimal style only: hide quota below this, show both providers at/above it.",

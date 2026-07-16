@@ -13,6 +13,20 @@ subagents (concurrency multiplies the draw).
 A `PreToolUse` hook already injects the current snapshot at every `Agent` call, so the
 numbers are in front of you. This skill is how you *act* on them.
 
+## Posture: orchestrate, don't execute
+
+The orchestrator's own turns are the most expensive spend there is — frontier model ×
+full context × every turn (field data 2026-07-16: two interactive frontier sessions
+burned a full 5-hour window inline while Codex sat at 21%). Keep the main thread for
+decomposition, judgment, review, and synthesis; delegate execution aggressively:
+
+- Multi-file implementation, broad reads/searches, test runs, mechanical edits: always
+  delegable. Inline only what's genuinely a one-liner.
+- Cheap delegation is the point, not a compromise — a Haiku/spark agent that needs a
+  correction round still costs less than the orchestrator doing the work inline.
+- The question is rarely *whether* to delegate; it's *which provider and tier* — which
+  is what the gates below answer.
+
 ## Read the state
 
 1. Run `python3 ~/.claude/quota-router/codex_quota_probe.py` → Codex windows.
@@ -43,7 +57,7 @@ Tier table (quota permitting):
 | Frontier | Fable 5 max (after Fable gate) else Opus 4.8 max | gpt-5.6-sol xhigh — **bounded implementation only** |
 | Hard reasoning | Opus 4.8 high; xhigh only with ample headroom | gpt-5.6-sol high |
 | Standard | Sonnet 5 medium | gpt-5.6-sol medium |
-| Mechanical | usually inline; else Haiku 5 low | gpt-5.3-codex-spark low |
+| Mechanical | Haiku 5 low (inline only if a true one-liner) | gpt-5.3-codex-spark low |
 | Adversarial review | Claude only if Codex wrote it | Codex only if Claude wrote it |
 
 (The model names are whatever the two plans expose today — edit this table when
@@ -71,6 +85,12 @@ For a candidate Claude tier with reserve `R`:
 **Reset proximity only decides wait-vs-switch — it never discounts the gate.** "Resets
 soon" = `minutes_to_reset ≤ max(20, 5% of window)`.
 
+**Conserve band:** `five_hour.used ≥ fivehour_conserve_pct` (default 50) → not yet
+constrained, but delegation *targets* shift: standard and mechanical work goes to Codex
+(or Haiku) by default, and Claude tiers above Haiku are reserved for tasks that need
+Claude specifically. This is what keeps the window from filling before the hard gates
+ever fire — by the time 85% trips, the cheap offloading should already have happened.
+
 ## Decide
 
 Apply in order; stop at the first that fires:
@@ -93,7 +113,9 @@ Apply in order; stop at the first that fires:
 7. **Both available:** use the task-class prior. Model strength is only a tiebreak —
    Claude for interactive ambiguity / sustained orchestration context; Codex for bounded
    implementation with immutable inputs and executable checks. Cross-provider review
-   overrides. Claude fan-out up to 3 for independent work.
+   overrides. Claude fan-out up to 3 for independent work. **In the conserve band,
+   the prior flips for standard/mechanical work: Codex (or Haiku) unless the task
+   needs Claude.**
 
 **Burst awareness:** raw-usage + reserve is always the hard gate, but if a window is
 climbing fast within its period (e.g. two recent readings jumped several points), treat it

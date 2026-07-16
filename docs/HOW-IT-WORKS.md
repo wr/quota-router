@@ -102,12 +102,21 @@ Run `statusline.py --demo` to see the styles rendered in your own terminal.
 The full decision procedure lives in [`skill/SKILL.md`](../skill/SKILL.md).
 The load-bearing ideas:
 
+- **Orchestrate, don't execute.** The main session's own turns are the most
+  expensive spend (frontier model × full context × every turn), so the policy
+  is aggressive delegation: implementation, searches, test runs, and
+  mechanical edits go to cheaper agents; the orchestrator keeps judgment,
+  review, and synthesis.
 - **Quota is a hard gate; model strength only breaks ties.**
 - **Windows are gated separately**, never collapsed into one number. Weekly
   above 75%: protect hard — offload to Codex, drop the frontier tier,
   fan-out 1. The 5-hour window above 85% (counting a per-tier launch
   reserve): drop a tier, wait if the reset is minutes away, otherwise
   offload.
+- **Delegation targets shift before the gates trip.** From
+  `fivehour_conserve_pct` (default 50) upward, standard and mechanical
+  delegations default to Codex or Haiku, saving the Claude window for what
+  needs Claude — so the hard thresholds rarely get reached at all.
 - **Unknown is not 0%.** A stale snapshot or a rolled-over window means
   "don't route on this", never "free headroom".
 - **Reset proximity decides wait-vs-switch.** It never discounts the capacity
@@ -153,6 +162,7 @@ session to answer anything you left before continuing its task.
 |---|---|---|
 | `weekly_protect_pct` | 75 | 7-day usage above this → protect mode |
 | `fivehour_soft_pct` | 85 | 5-hour usage + launch reserve above this → constrained |
+| `fivehour_conserve_pct` | 50 | above this, standard/mechanical delegations default to Codex/Haiku |
 | `claude_cache_ttl_seconds` | 90 | Claude numbers older than this (and absent from the latest tick) count as stale |
 | `codex_old_snapshot_seconds` | 1800 | Codex snapshots older than this get the `~` marker |
 | `statusline_style` | minimal | `minimal`, `braille`, `circles`, or `plain` |

@@ -171,12 +171,17 @@ def build_context():
     if seven and seven["fresh"] and seven["used"] > weekly_thr:
         signals.append(f"WEEKLY BINDING (>{weekly_thr}%): protect hard — offload heavy work to Codex, "
                        f"drop Fable, prefer cheaper Claude tiers, Claude fan-out=1.")
+    conserve = cfg.get("fivehour_conserve_pct", 50)
     if five and five["fresh"] and five["used"] > five_thr:
         soon = five["minutes_to_reset"] is not None and five["minutes_to_reset"] <= 20
         if soon:
             signals.append(f"5h SOFT (>{five_thr}%) but resets soon: prefer waiting or a lower Claude tier over offloading.")
         else:
             signals.append(f"5h CONSTRAINED (>{five_thr}%): drop a Claude tier first, else offload to Codex.")
+    elif five and five["fresh"] and five["used"] >= conserve:
+        signals.append(f"5h CONSERVE (≥{conserve}%): for standard/mechanical work prefer a "
+                       f"Codex agent (or Haiku) over mid/high Claude tiers — save the Claude "
+                       f"window for what needs Claude.")
     ov = cfg.get("test_override")
     if isinstance(ov, dict) and ov.get("expires_epoch", 0) > now:
         signals.append("NOTE: an active test_override is in effect — this is a TEST routing decision.")
