@@ -55,7 +55,14 @@ opus-4.8 high · ~/projects                                  (all quiet)
 opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
 ```
 
-- Model + effort in the accent color, working directory in gray.
+- Model + effort in the accent color; the place segment in gray shows the
+  repo and its git state: `􀐞 repo 􀜞` (repo icon, then a state symbol —
+  main/clean, main/modified `􀧙`, branch/clean `􀣽` + branch name,
+  branch/modified `􀫲`, PR in review `􀩄`, PR checks green `􀁣`). PR state is
+  cached for 3 minutes and refreshed by a detached background `gh` call, so
+  ticks never wait on the network. Outside a git repo it's the ~-shortened
+  path. The symbols are SF Symbols (macOS); on other platforms — or with
+  `statusline_git_symbols: "ascii"` — a plain unicode set is used.
 - Below `statusline_show_pct` (default 75) on both providers: no numbers at
   all. The moment either crosses it, both providers' most-pressured windows
   appear — your usage and the alternative, in one glance.
@@ -129,6 +136,7 @@ the window caps out, the session stops and waits for you. With
 | `statusline_style` | minimal | `minimal`, `braille`, `circles`, or `plain` |
 | `statusline_color` | true | ANSI colors on the readout |
 | `statusline_show_pct` | 75 | minimal style: hide quota below this, show both providers at it |
+| `statusline_git_symbols` | auto | `auto` (SF Symbols on macOS, unicode elsewhere), `sf`, or `ascii` |
 | `statusline_accent` | #D97757 | minimal style: fallback hex for the model name. Per repo it auto-follows a custom Claude Code theme (`"theme": "custom:<name>"` in the project's `.claude` settings → `~/.claude/themes/<name>.json` `overrides.claude`); an explicit `statusline_accent` key in project settings or a `STATUSLINE_ACCENT` env var overrides the theme |
 | `hibernate_enabled` | false | Opt-in auto-resume after a usage-limit stop |
 | `hibernate_settle_seconds` | 90 | Extra wait past the reset before resuming |

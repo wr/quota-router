@@ -199,6 +199,123 @@ def _effort():
 
 
 THEMES_DIR = os.path.join(HOME, ".claude", "themes")
+PR_CACHE = os.path.join(ROUTER_DIR, "pr-cache.json")
+PR_TTL = 180
+
+# SF Symbols (macOS; needs a font stack that includes SF Pro) with a plain
+# unicode fallback for everything else. Override via statusline_git_symbols.
+GIT_SYMBOLS_SF = {"repo": "􀐞", "main_clean": "􀜞", "main_dirty": "􀧙",
+                  "branch_clean": "􀣽", "branch_dirty": "􀫲",
+                  "pr_open": "􀩄", "pr_green": "􀁣"}
+GIT_SYMBOLS_ASCII = {"repo": "▣", "main_clean": "●", "main_dirty": "◐",
+                     "branch_clean": "⎇", "branch_dirty": "±",
+                     "pr_open": "◌", "pr_green": "✓"}
+
+
+def _git(cwd, *args, timeout=2):
+    try:
+        out = subprocess.run(["git", "-C", cwd] + list(args),
+                             capture_output=True, text=True, timeout=timeout)
+        return out.stdout.strip() if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _pr_state(top, branch):
+    """Cached PR state for this branch: 'green', 'open', or None. A stale
+    entry triggers a detached background `gh` refresh — ticks never block on
+    the network, they render the last known state."""
+    key = f"{top}:{branch}"
+    cache = _load_json(PR_CACHE, {})
+    entry = cache.get(key) if isinstance(cache, dict) else None
+    now = time.time()
+    fresh = isinstance(entry, dict) and now - entry.get("checked_at", 0) <= PR_TTL
+    refreshing = isinstance(entry, dict) and now - entry.get("refreshing_at", 0) <= 30
+    if not fresh and not refreshing and not os.environ.get("QUOTA_PR_NO_REFRESH"):
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[key] = dict(entry or {}, refreshing_at=now)
+        _write_pr_cache(cache)
+        try:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                              "--refresh-pr", top, branch],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        except Exception:
+            pass
+    return entry.get("state") if isinstance(entry, dict) else None
+
+
+def _write_pr_cache(cache):
+    try:
+        tmp = PR_CACHE + f".{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(cache, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, PR_CACHE)
+    except Exception:
+        pass
+
+
+def _refresh_pr(top, branch):
+    state = None
+    try:
+        out = subprocess.run(["gh", "pr", "view", branch,
+                              "--json", "state,statusCheckRollup"],
+                             cwd=top, capture_output=True, text=True, timeout=20)
+        if out.returncode == 0:
+            d = json.loads(out.stdout)
+            if d.get("state") == "OPEN":
+                rolls = d.get("statusCheckRollup") or []
+                good = ("SUCCESS", "NEUTRAL", "SKIPPED")
+                green = bool(rolls) and all(
+                    (r.get("conclusion") or r.get("state")) in good for r in rolls)
+                state = "green" if green else "open"
+    except Exception:
+        pass
+    now = time.time()
+    cache = _load_json(PR_CACHE, {})
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[f"{top}:{branch}"] = {"state": state, "checked_at": now}
+    cache = {k: v for k, v in cache.items()
+             if isinstance(v, dict) and now - v.get("checked_at", 0) < 86400}
+    _write_pr_cache(cache)
+    return 0
+
+
+def _git_segment(cwd, config):
+    """`􀐞 repo 􀜞` on main, `􀐞 repo 􀣽 branch` on a branch; the state symbol
+    encodes clean/modified and open/green PRs. Outside a git repo, the
+    ~-shortened path."""
+    if not cwd:
+        return ""
+    short = "~" + cwd[len(HOME):] if cwd.startswith(HOME) else cwd
+    if not os.path.isdir(cwd):
+        return short
+    top = _git(cwd, "rev-parse", "--show-toplevel")
+    if not top:
+        return short
+    style = config.get("statusline_git_symbols", "auto")
+    if style == "auto":
+        style = "sf" if sys.platform == "darwin" else "ascii"
+    sym = GIT_SYMBOLS_SF if style == "sf" else GIT_SYMBOLS_ASCII
+    branch = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?"
+    dirty = bool(_git(cwd, "status", "--porcelain"))
+    on_main = branch in ("main", "master")
+    pr = None if on_main else _pr_state(top, branch)
+    if pr == "green":
+        state = sym["pr_green"]
+    elif pr == "open":
+        state = sym["pr_open"]
+    elif dirty:
+        state = sym["main_dirty"] if on_main else sym["branch_dirty"]
+    else:
+        state = sym["main_clean"] if on_main else sym["branch_clean"]
+    seg = f"{sym['repo']} {os.path.basename(top)} {state}"
+    if not on_main:
+        seg += f" {branch}"
+    return seg
 
 
 def _theme_to_hex(theme):
@@ -271,7 +388,7 @@ def _render_minimal(cache, config, now, payload):
     head = model + (f" {effort}" if effort else "")
     cwd_raw = str(meta.get("cwd") or stored.get("cwd") or "")
     accent = _hex_to_ansi(_accent_hex(config, cwd_raw))
-    cwd = "~" + cwd_raw[len(HOME):] if cwd_raw.startswith(HOME) else cwd_raw
+    place = _git_segment(cwd_raw, config)
 
     def claude_pick():
         best = None
@@ -319,8 +436,8 @@ def _render_minimal(cache, config, now, payload):
         parts.append(c(WHITE, "codex") + " " + (pct_str(cx) if cx else "--"))
     else:
         parts.append(c(accent, head))
-    if cwd:
-        parts.append(c(GRAY, cwd))
+    if place:
+        parts.append(c(GRAY, place))
     prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
     return prefix + c(GRAY, " · ").join(parts) if color_on \
         else prefix + " · ".join(parts)
@@ -635,6 +752,45 @@ def _self_test():
             if saved_env:
                 os.environ["STATUSLINE_ACCENT"] = saved_env
 
+        # ---- git segment ----
+        global PR_CACHE, _pr_state
+        saved_prc, saved_prs = PR_CACHE, _pr_state
+        PR_CACHE = os.path.join(d, "pr-cache.json")
+        os.environ["QUOTA_PR_NO_REFRESH"] = "1"
+        cfgg = {"statusline_git_symbols": "sf"}
+        repo = os.path.join(d, "myrepo")
+        os.makedirs(repo)
+        import subprocess as sp
+
+        def git(*a):
+            sp.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t"]
+                   + list(a), capture_output=True)
+
+        git("init", "-q", "-b", "main")
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("x")
+        git("add", "a.txt")
+        git("commit", "-qm", "init")
+        try:
+            check("git_main_clean", _git_segment(repo, cfgg) == "􀐞 myrepo 􀜞")
+            with open(os.path.join(repo, "a.txt"), "w") as f:
+                f.write("y")
+            check("git_main_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀧙")
+            git("checkout", "-qb", "feat")
+            check("git_branch_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀫲 feat")
+            git("commit", "-aqm", "wip")
+            check("git_branch_clean", _git_segment(repo, cfgg) == "􀐞 myrepo 􀣽 feat")
+            _pr_state = lambda t, b: "open"
+            check("git_pr_open", _git_segment(repo, cfgg) == "􀐞 myrepo 􀩄 feat")
+            _pr_state = lambda t, b: "green"
+            check("git_pr_green", _git_segment(repo, cfgg) == "􀐞 myrepo 􀁣 feat")
+            nongit = os.path.join(d, "plain")
+            os.makedirs(nongit)
+            check("git_fallback_path", _git_segment(nongit, cfgg) == nongit)
+        finally:
+            PR_CACHE, _pr_state = saved_prc, saved_prs
+            os.environ.pop("QUOTA_PR_NO_REFRESH", None)
+
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
 
@@ -672,4 +828,6 @@ if __name__ == "__main__":
         sys.exit(_self_test())
     if len(sys.argv) > 1 and sys.argv[1] == "--demo":
         sys.exit(_demo())
+    if len(sys.argv) > 3 and sys.argv[1] == "--refresh-pr":
+        sys.exit(_refresh_pr(sys.argv[2], sys.argv[3]))
     sys.exit(main())

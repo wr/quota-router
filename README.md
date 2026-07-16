@@ -10,8 +10,9 @@ You pay for two AI subscriptions. Each has its own rate windows, neither tool
 can see the other's, and the model deciding where your subagents run can't see
 either. quota-router fixes the three ways that bites you:
 
-- **A status line that stays out of the way.** `opus-4.8 high · ~/projects`
-  and nothing else — until a provider crosses 75%, when both pools' numbers
+- **A status line that stays out of the way.** Model, repo, and git state
+  (branch, dirty, PR in review, checks green) in your repo's own theme color —
+  and nothing else, until a provider crosses 75%, when both pools' numbers
   appear with a reset countdown, yellow first, red past the gate. (Prefer
   always-on gauges? Braille and circle styles are one config key away.)
 - **Work lands where the headroom is.** Every subagent launch gets the live
