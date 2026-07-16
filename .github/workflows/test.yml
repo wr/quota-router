@@ -19,5 +19,5 @@ jobs:
         run: python3 router/hibernate_watchdog.py --self-test
       - name: hook smoke test
         run: |
-          echo '{"tool_name":"Agent"}' | python3 router/pretooluse_hook.py \
+          echo '{"hook_event_name":"PreToolUse","tool_name":"Agent"}' | python3 router/pretooluse_hook.py \
             | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['hookSpecificOutput']['hookEventName']=='PreToolUse'"

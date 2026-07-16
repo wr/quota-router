@@ -106,7 +106,7 @@ python3 "$ROUTER_DIR/codex_quota_probe.py" --self-test >/dev/null && echo "probe
 python3 "$ROUTER_DIR/statusline.py" --self-test >/dev/null && echo "statusline self-test: OK"
 python3 "$ROUTER_DIR/hibernate_hook.py" --self-test >/dev/null && echo "hibernate hook self-test: OK"
 python3 "$ROUTER_DIR/hibernate_watchdog.py" --self-test >/dev/null && echo "hibernate watchdog self-test: OK"
-echo '{"tool_name":"Agent"}' | python3 "$ROUTER_DIR/pretooluse_hook.py" \
+echo '{"hook_event_name":"PreToolUse","tool_name":"Agent"}' | python3 "$ROUTER_DIR/pretooluse_hook.py" \
   | python3 -c "import json,sys; json.load(sys.stdin)" >/dev/null && echo "hook smoke test: OK"
 
 echo
