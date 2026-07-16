@@ -4,7 +4,7 @@
 
 Run Claude Code and OpenAI Codex together without babysitting either quota.
 
-![quota-router in action](docs/demo.gif)
+![quota-router statusline states](docs/demo.png)
 
 You pay for two AI subscriptions. Each has its own rate windows, neither tool
 can see the other's, and the model deciding where your subagents run can't see

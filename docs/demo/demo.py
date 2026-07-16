@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Plays the README demo storyline in the terminal. Recorded with vhs:
+"""Renders every statusline state as a stacked list for the README image:
 
-    cd docs/demo && vhs demo.tape
+    cd docs/demo && vhs demo.tape   # writes ../demo.png
 
-Uses the real statusline renderer, so the GIF shows exactly what ships.
-The git segment and accents are pinned per frame so the story is stable
+Uses the real statusline renderer, so the image shows exactly what ships.
+Git segment, agents, and accents are pinned per state so the list is stable
 regardless of the state of any real repo.
 """
 import os
@@ -24,7 +24,7 @@ sl._effort = lambda: "high"
 MOJITO_GREEN, SHOP_INDIGO = "#4cb782", "#5e6ad2"
 
 
-def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, hold, agents=""):
+def render(accent, place, five, codex, mins, codex_mins, hibernating, agents=""):
     now = time.time()
     cache = {"five_hour": {"used_percentage": five, "observed_at": now,
                            "present_in_latest_payload": True,
@@ -44,29 +44,33 @@ def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, ho
                      "used_percent": float(codex), "minutes_to_reset": codex_mins}}}
     # /dev/null exists, so the renderer sees a hibernation marker
     sl.HIBERNATE_MARKER = "/dev/null" if hibernating else os.path.join(HERE, "none")
-    line = sl._render(cache, CFG, now, payload)
-    sys.stdout.write("\033[2J\033[H\n")
-    sys.stdout.write(f"  {DIM}{caption}{RESET}\n\n")
-    sys.stdout.write(f"  {line}\n")
-    sys.stdout.flush()
-    time.sleep(hold)
+    return sl._render(cache, CFG, now, payload)
 
 
-FRAMES = [
-    ("quiet: model + repo state, in the repo's theme color",
-     MOJITO_GREEN, "􀐞 mojito 􀜞 main", 42, 15, 200, 6000, False, 3.2),
-    ("another repo, its own accent -- on a branch, uncommitted changes",
-     SHOP_INDIGO, "􀐞 shop 􀫲 pay-links", 58, 16, 170, 6000, False, 3.2),
+STATES = [
+    ("quiet -- under 75%, quota stays out of the way",
+     dict(accent=MOJITO_GREEN, place="􀐞 mojito 􀜞 main",
+          five=42, codex=15, mins=200, codex_mins=6000, hibernating=False)),
+    ("another repo, its own theme accent -- branch, uncommitted changes",
+     dict(accent=SHOP_INDIGO, place="􀐞 shop 􀫲 pay-links",
+          five=58, codex=16, mins=170, codex_mins=6000, hibernating=False)),
     ("5-hour window crosses 75%: both pools appear",
-     SHOP_INDIGO, "􀐞 shop 􀫲 pay-links", 78, 21, 130, 6000, False, 3.2),
-    ("past the gate -- new work routes to codex; PR in review",
-     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 91, 27, 84, 6000, False, 3.4,
-     "􀃋 sonnet high  􀃍 sol xhigh"),
+     dict(accent=SHOP_INDIGO, place="􀐞 shop 􀫲 pay-links",
+          five=78, codex=21, mins=130, codex_mins=6000, hibernating=False)),
+    ("past the gate: subagents fan out to codex; PR in review",
+     dict(accent=SHOP_INDIGO, place="􀐞 shop 􀩄 pay-links #4",
+          five=91, codex=27, mins=84, codex_mins=6000, hibernating=False,
+          agents="􀃋 sonnet high  􀃍 sol xhigh")),
     ("capped mid-task -> hibernating until reset",
-     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 99, 34, 22, 162, True, 3.2),
+     dict(accent=SHOP_INDIGO, place="􀐞 shop 􀩄 pay-links #4",
+          five=99, codex=34, mins=22, codex_mins=162, hibernating=True)),
     ("window reset: session resumed -- PR checks green",
-     SHOP_INDIGO, "􀐞 shop 􀁣 pay-links #4", 4, 34, 289, 6000, False, 3.4),
+     dict(accent=SHOP_INDIGO, place="􀐞 shop 􀁣 pay-links #4",
+          five=4, codex=34, mins=289, codex_mins=6000, hibernating=False)),
 ]
 
-for f in FRAMES:
-    frame(*f)
+sys.stdout.write("\033[2J\033[H")
+for caption, kw in STATES:
+    sys.stdout.write(f"\n  {DIM}{caption}{RESET}\n")
+    sys.stdout.write(f"  {render(**kw)}\n")
+sys.stdout.flush()
