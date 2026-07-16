@@ -24,7 +24,7 @@ sl._effort = lambda: "high"
 MOJITO_GREEN, SHOP_INDIGO = "#4cb782", "#5e6ad2"
 
 
-def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, hold):
+def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, hold, agents=""):
     now = time.time()
     cache = {"five_hour": {"used_percentage": five, "observed_at": now,
                            "present_in_latest_payload": True,
@@ -36,6 +36,7 @@ def frame(caption, accent, place, five, codex, mins, codex_mins, hibernating, ho
                "workspace": {"current_dir": "/x"}}
     sl._accent_hex = lambda cfg, cwd, _a=accent: _a
     sl._git_segment = lambda cwd, cfg, _p=place: _p
+    sl._agents_segment = lambda cache, now, eff, _a=agents: _a
     sl._load_json_from_probe = lambda: {
         "available": True, "snapshot_age_seconds": 5, "windows": {
             "short": {"present": False},
@@ -59,7 +60,8 @@ FRAMES = [
     ("5-hour window crosses 75%: both pools appear",
      SHOP_INDIGO, "􀐞 shop 􀫲 pay-links", 78, 21, 130, 6000, False, 3.2),
     ("past the gate -- new work routes to codex; PR in review",
-     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 91, 27, 84, 6000, False, 3.2),
+     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 91, 27, 84, 6000, False, 3.4,
+     "􀃋 sonnet high  􀃍 sol xhigh"),
     ("capped mid-task -> hibernating until reset",
      SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 99, 34, 22, 162, True, 3.2),
     ("window reset: session resumed -- PR checks green",

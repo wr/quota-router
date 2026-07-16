@@ -1,7 +1,7 @@
 Output ../demo.gif
-Set FontSize 26
+Set FontSize 24
 Set FontFamily "SF Mono, SF Pro Text, SF Pro, Apple Symbols"
-Set Width 1220
+Set Width 1580
 Set Height 230
 Set Padding 20
 Hide

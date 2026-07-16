@@ -345,8 +345,7 @@ AGENTS = os.path.join(ROUTER_DIR, "agents.json")
 CODEX_SESSIONS = os.path.join(HOME, ".codex", "sessions")
 CODEX_ACTIVE_SECONDS = 120
 AGENT_BADGE_BASE = 0x1000CB  # SF Symbols 1.square.fill, +2 per digit
-EFFORT_GLYPHS = {"low": "\U00101270", "medium": "\U00101597",
-                 "high": "\U00101598", "xhigh": "\U001002E7", "max": "\U00101289"}
+EFFORT_LABELS = ("low", "medium", "high", "xhigh", "max")
 
 
 def _badge(n):
@@ -382,8 +381,8 @@ def _codex_active(now):
 
 
 def _agents_segment(cache, now, session_effort):
-    """`􀃋 sonnet 􁉰 􀃍 sol 􁖘` — one numbered badge per running subagent
-    (Claude registry first, then live Codex runs), model, effort gauge."""
+    """`􀃋 sonnet high  􀃍 sol xhigh` — one numbered badge per running
+    subagent (Claude registry first, then live Codex runs), model, effort."""
     entries = []
     reg = _load_json(AGENTS, [])
     if isinstance(reg, list):
@@ -401,9 +400,9 @@ def _agents_segment(cache, now, session_effort):
     parts = []
     for i, (model, effort) in enumerate(entries[:9], 1):
         s = f"{_badge(i)} {model}"
-        g = EFFORT_GLYPHS.get(str(effort or "").lower())
-        if g:
-            s += f" {g}"
+        label = str(effort or "").lower()
+        if label in EFFORT_LABELS:
+            s += f" {label}"
         parts.append(s)
     if len(entries) > 9:
         parts.append(f"+{len(entries) - 9}")
@@ -890,10 +889,9 @@ def _self_test():
         cache_meta = {"meta": {"model": "Fable 5"}}
         seg = _agents_segment(cache_meta, now, "high")
         check("agents_segment",
-              seg == "􀃋 sonnet 􁖘  􀃍 fable-5 􁖘  􀃏 sol 􀋧")
+              seg == "􀃋 sonnet high  􀃍 fable-5 high  􀃏 sol xhigh")
         seg2 = _agents_segment(cache_meta, now, "low")
-        check("agents_effort_glyphs", "sonnet \U00101270" in seg2
-              and "sol \U001002E7" in seg2)
+        check("agents_effort_labels", "sonnet low" in seg2 and "sol xhigh" in seg2)
         _load_json_from_probe = lambda: {"available": False}
         try:
             la = _render(low, cfgm, now, payload)
