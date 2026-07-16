@@ -16,8 +16,10 @@ config.previous_statusline and wrapped (run with the original stdin under a
 short timeout), with our readout appended.
 """
 import fcntl
+import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -339,6 +341,75 @@ def _theme_to_hex(theme):
     return v if isinstance(v, str) and v.startswith("#") else None
 
 
+AGENTS = os.path.join(ROUTER_DIR, "agents.json")
+CODEX_SESSIONS = os.path.join(HOME, ".codex", "sessions")
+CODEX_ACTIVE_SECONDS = 120
+AGENT_BADGE_BASE = 0x1000CB  # SF Symbols 1.square.fill, +2 per digit
+EFFORT_GLYPHS = {"low": "\U00101270", "medium": "\U00101597",
+                 "high": "\U00101598", "xhigh": "\U00101598", "max": "\U00101598"}
+
+
+def _badge(n):
+    if 1 <= n <= 9:
+        return chr(AGENT_BADGE_BASE + 2 * (n - 1))
+    return f"{n}."
+
+
+def _codex_active(now):
+    """Rollout files written in the last couple of minutes = live Codex runs.
+    Model and effort come from the newest turn_context in the file tail."""
+    out = []
+    try:
+        days = sorted(glob.glob(os.path.join(CODEX_SESSIONS, "*", "*", "*")))[-2:]
+        for day in days:
+            for p in glob.glob(os.path.join(day, "rollout-*.jsonl")):
+                try:
+                    if now - os.path.getmtime(p) > CODEX_ACTIVE_SECONDS:
+                        continue
+                    with open(p, "rb") as f:
+                        f.seek(0, 2)
+                        f.seek(max(0, f.tell() - 65536))
+                        tail = f.read().decode("utf-8", "replace")
+                    models = re.findall(r'"model":"([^"]+)"', tail)
+                    efforts = re.findall(r'"effort":"([^"]+)"', tail)
+                    out.append({"model": models[-1] if models else "codex",
+                                "effort": efforts[-1] if efforts else None})
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    return out
+
+
+def _agents_segment(cache, now, session_effort):
+    """`􀃋 sonnet 􁉰 􀃍 sol 􁖘` — one numbered badge per running subagent
+    (Claude registry first, then live Codex runs), model, effort gauge."""
+    entries = []
+    reg = _load_json(AGENTS, [])
+    if isinstance(reg, list):
+        for e in sorted(reg, key=lambda x: x.get("started_at", 0)):
+            if not isinstance(e, dict):
+                continue
+            model = e.get("model")
+            if not model:
+                meta = cache.get("meta") if isinstance(cache.get("meta"), dict) else {}
+                model = str(meta.get("model") or "claude").lower() \
+                    .replace("claude-", "").replace(" ", "-")
+            entries.append((str(model), session_effort))
+    for c in _codex_active(now):
+        entries.append((c["model"].split("-")[-1], c.get("effort")))
+    parts = []
+    for i, (model, effort) in enumerate(entries[:9], 1):
+        s = f"{_badge(i)} {model}"
+        g = EFFORT_GLYPHS.get(str(effort or "").lower())
+        if g:
+            s += f" {g}"
+        parts.append(s)
+    if len(entries) > 9:
+        parts.append(f"+{len(entries) - 9}")
+    return "  ".join(parts)
+
+
 def _accent_hex(config, cwd):
     """Per-repo accent, nearest configuration wins: STATUSLINE_ACCENT env var,
     then — walking up from the session's cwd — an explicit `statusline_accent`
@@ -444,6 +515,9 @@ def _render_minimal(cache, config, now, payload):
         parts.append(c(WHITE, "codex") + " " + (pct_str(cx) if cx else "--"))
     else:
         parts.append(c(accent, head))
+    agents = _agents_segment(cache, now, effort)
+    if agents:
+        parts.append(c(WHITE, agents))
     if place:
         parts.append(c(GRAY, place))
     prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
@@ -653,9 +727,11 @@ def _self_test():
         check("hibernate_prefix", line4.startswith("⏾ "))
 
         # ---- minimal style ----
-        global _effort
-        saved_eff = _effort
+        global _effort, AGENTS, _codex_active
+        saved_eff, saved_agents, saved_cact = _effort, AGENTS, _codex_active
         _effort = lambda: "high"
+        AGENTS = os.path.join(d, "agents.json")  # not created yet: no agents
+        _codex_active = lambda now: []
         cfgm = {"statusline_style": "minimal", "statusline_color": True,
                 "weekly_protect_pct": 75, "fivehour_soft_pct": 85,
                 "claude_cache_ttl_seconds": 90}
@@ -801,6 +877,32 @@ def _self_test():
         finally:
             PR_CACHE, _pr_state = saved_prc, saved_prs
             os.environ.pop("QUOTA_PR_NO_REFRESH", None)
+
+        # ---- running agents segment ----
+        check("badge_formula", _badge(1) == "􀃋" and _badge(2) == "􀃍"
+              and _badge(3) == "􀃏" and _badge(12) == "12.")
+        with open(AGENTS, "w") as f:
+            json.dump([{"id": "a", "session_id": "s", "model": "sonnet",
+                        "background": True, "started_at": now},
+                       {"id": "b", "session_id": "s", "model": None,
+                        "background": True, "started_at": now + 1}], f)
+        _codex_active = lambda now: [{"model": "gpt-5.6-sol", "effort": "xhigh"}]
+        cache_meta = {"meta": {"model": "Fable 5"}}
+        seg = _agents_segment(cache_meta, now, "high")
+        check("agents_segment",
+              seg == "􀃋 sonnet 􁖘  􀃍 fable-5 􁖘  􀃏 sol 􁖘")
+        seg2 = _agents_segment(cache_meta, now, "low")
+        check("agents_effort_glyphs", "sonnet \U00101270" in seg2
+              and "sol \U00101598" in seg2)
+        _load_json_from_probe = lambda: {"available": False}
+        try:
+            la = _render(low, cfgm, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("agents_in_render", "􀃋 sonnet" in la and "sol" in la)
+        os.unlink(AGENTS)
+        _codex_active = lambda now: []
+        _effort, AGENTS, _codex_active = saved_eff, saved_agents, saved_cact
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1

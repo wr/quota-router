@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for Agent/Task delegation.
+"""Agent-delegation hooks: quota context injection + running-agent registry.
 
-Injects the live quota snapshot + a routing nudge as additionalContext so the
-quota gate is UNCONDITIONALLY present at the moment of delegation, rather than
-relying on the model remembering to invoke the subagent-router skill. Advisory:
-it surfaces data and points at the skill; it does not block the tool.
+PreToolUse (Agent): injects the live quota snapshot as additionalContext so
+the routing gate is UNCONDITIONALLY present at the moment of delegation, and
+records the launch in agents.json so the statusline can show running
+subagents. Advisory: it never blocks the tool.
 
-Always emits valid JSON and exits 0 — a hook must never wedge a delegation.
+PostToolUse (Agent): removes foreground launches from the registry (for a
+backgrounded agent the tool returns immediately, so its Post event is just
+the "started" ack and the entry is kept).
+
+SubagentStop: removes the oldest entry for the session — background agents'
+best completion signal. SessionEnd: clears the session's entries. A 2-hour
+TTL scrubs anything a crash leaves behind.
+
+Always exits 0 — a hook must never wedge a delegation.
 """
+import fcntl
 import json
 import os
 import subprocess
@@ -19,6 +28,9 @@ ROUTER = os.path.join(HOME, ".claude", "quota-router")
 CACHE = os.path.join(HOME, ".claude", "quota-cache.json")
 CONFIG = os.path.join(ROUTER, "config.json")
 PROBE = os.path.join(ROUTER, "codex_quota_probe.py")
+AGENTS = os.path.join(ROUTER, "agents.json")
+AGENTS_LOCK = AGENTS + ".lock"
+AGENT_TTL = 2 * 3600
 
 
 def _load(path, default):
@@ -29,6 +41,71 @@ def _load(path, default):
         return default
 
 
+# ---------------------------------------------------------------------------
+# running-agent registry
+# ---------------------------------------------------------------------------
+def _update_agents(mutate):
+    fd = os.open(AGENTS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        reg = _load(AGENTS, [])
+        if not isinstance(reg, list):
+            reg = []
+        now = time.time()
+        reg = [e for e in reg if isinstance(e, dict)
+               and now - e.get("started_at", 0) < AGENT_TTL]
+        reg = mutate(reg, now)
+        tmp = AGENTS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(reg, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, AGENTS)
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _register(evt):
+    ti = evt.get("tool_input") or {}
+    entry = {"id": evt.get("tool_use_id"),
+             "session_id": evt.get("session_id"),
+             "model": ti.get("model"),
+             "type": ti.get("subagent_type"),
+             # the Agent tool backgrounds by default
+             "background": bool(ti.get("run_in_background", True)),
+             "started_at": time.time()}
+    _update_agents(lambda reg, now: reg + [entry])
+
+
+def _deregister(evt, scope):
+    """scope: 'foreground' (Post: by id, only non-background entries),
+    'oldest' (SubagentStop, which carries no tool_use_id), 'session'
+    (SessionEnd)."""
+    tid = evt.get("tool_use_id")
+    sid = evt.get("session_id")
+
+    def mut(reg, now):
+        if scope == "session":
+            return [e for e in reg if e.get("session_id") != sid]
+        if scope == "foreground":
+            hit = [e for e in reg if tid and e.get("id") == tid]
+            if hit and not hit[0].get("background"):
+                return [e for e in reg if e.get("id") != tid]
+            return reg
+        mine = [e for e in reg if e.get("session_id") == sid] or reg
+        if mine:
+            oldest = min(mine, key=lambda e: e.get("started_at", 0))
+            return [e for e in reg if e is not oldest]
+        return reg
+
+    _update_agents(mut)
+
+
+# ---------------------------------------------------------------------------
+# quota context (PreToolUse)
+# ---------------------------------------------------------------------------
 def _codex():
     try:
         out = subprocess.run([sys.executable, PROBE], capture_output=True,
@@ -114,9 +191,39 @@ def build_context():
 
 
 def main():
-    # consume stdin (hook payload) but we don't need its contents
     try:
-        sys.stdin.read()
+        raw = sys.stdin.read()
+    except Exception:
+        raw = ""
+    try:
+        evt = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        evt = {}
+    name = evt.get("hook_event_name")
+
+    if name == "PostToolUse":
+        try:
+            if evt.get("tool_name") == "Agent":
+                _deregister(evt, "foreground")
+        except Exception:
+            pass
+        return 0
+    if name == "SubagentStop":
+        try:
+            _deregister(evt, "oldest")
+        except Exception:
+            pass
+        return 0
+    if name == "SessionEnd":
+        try:
+            _deregister(evt, "session")
+        except Exception:
+            pass
+        return 0
+
+    # PreToolUse (matcher: Agent)
+    try:
+        _register(evt)
     except Exception:
         pass
     try:
@@ -132,5 +239,72 @@ def main():
     return 0
 
 
+# ---------------------------------------------------------------------------
+# self-test
+# ---------------------------------------------------------------------------
+def _self_test():
+    global AGENTS, AGENTS_LOCK
+    import tempfile
+    passed = failed = 0
+
+    def check(name, cond):
+        nonlocal passed, failed
+        print(("PASS " if cond else "FAIL ") + name)
+        if cond:
+            passed += 1
+        else:
+            failed += 1
+
+    def reg():
+        return _load(AGENTS, [])
+
+    with tempfile.TemporaryDirectory() as d:
+        AGENTS = os.path.join(d, "agents.json")
+        AGENTS_LOCK = AGENTS + ".lock"
+
+        # 1. register foreground + background (background is the default)
+        _register({"tool_use_id": "t1", "session_id": "s1",
+                   "tool_input": {"model": "sonnet", "subagent_type": "Explore",
+                                  "run_in_background": False}})
+        _register({"tool_use_id": "t2", "session_id": "s1",
+                   "tool_input": {"subagent_type": "general-purpose"}})
+        check("registered_two", len(reg()) == 2)
+        check("bg_default_true",
+              [e for e in reg() if e["id"] == "t2"][0]["background"] is True)
+
+        # 2. Post removes a foreground entry by id
+        _deregister({"tool_use_id": "t1", "session_id": "s1"}, "foreground")
+        check("post_removes_foreground", [e["id"] for e in reg()] == ["t2"])
+
+        # 3. Post does NOT remove a background entry (its Post is the start ack)
+        _deregister({"tool_use_id": "t2", "session_id": "s1"}, "foreground")
+        check("post_keeps_background", [e["id"] for e in reg()] == ["t2"])
+
+        # 4. SubagentStop removes the oldest entry for the session
+        _register({"tool_use_id": "t3", "session_id": "s1",
+                   "tool_input": {"model": "haiku"}})
+        _deregister({"session_id": "s1"}, "oldest")
+        check("subagentstop_removes_oldest", [e["id"] for e in reg()] == ["t3"])
+
+        # 5. SessionEnd clears the session
+        _register({"tool_use_id": "t4", "session_id": "s2", "tool_input": {}})
+        _deregister({"session_id": "s1"}, "session")
+        check("sessionend_clears_session", [e["id"] for e in reg()] == ["t4"])
+
+        # 6. TTL scrub drops stale entries on the next mutation
+        stale = {"id": "old", "session_id": "s3",
+                 "started_at": time.time() - AGENT_TTL - 60, "background": True}
+        current = reg()
+        with open(AGENTS, "w") as f:
+            json.dump(current + [stale], f)
+        _update_agents(lambda r, now: r)
+        check("ttl_scrub", [e["id"] for e in reg()] == ["t4"])
+
+    print(f"\n{passed} passed, {failed} failed")
+    return 0 if failed == 0 else 1
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        sys.exit(_self_test())
     sys.exit(main())

@@ -88,6 +88,9 @@ def ensure_hook(event, script, matcher=None):
     print(f"registered {event} hook" + (f" (matcher: {matcher})" if matcher else ""))
 
 ensure_hook("PreToolUse", "pretooluse_hook.py", matcher="Agent")
+ensure_hook("PostToolUse", "pretooluse_hook.py", matcher="Agent")
+ensure_hook("SubagentStop", "pretooluse_hook.py")
+ensure_hook("SessionEnd", "pretooluse_hook.py")
 ensure_hook("Stop", "hibernate_hook.py")
 ensure_hook("Notification", "hibernate_hook.py")
 

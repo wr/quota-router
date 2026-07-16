@@ -47,7 +47,8 @@ if isinstance(sl, dict) and "quota-router/statusline.py" in str(sl.get("command"
         settings.pop("statusLine", None)
         print("removed statusLine")
 
-for event in ("PreToolUse", "Stop", "Notification"):
+for event in ("PreToolUse", "PostToolUse", "SubagentStop", "SessionEnd",
+              "Stop", "Notification"):
     arr = settings.get("hooks", {}).get(event)
     if isinstance(arr, list):
         kept = [e for e in arr if "quota-router/" not in json.dumps(e)]
