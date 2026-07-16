@@ -51,12 +51,12 @@ Every script has a `--self-test`; CI runs them all.
 The default style is `minimal` — quota is invisible until it matters:
 
 ```
-opus-4.8 high · ~/projects                                  (all quiet)
-opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
+􀐞 repo 􀜞 main · opus-4.8 high                                  (all quiet)
+􀐞 repo 􀜞 main · opus-4.8 high 76% (2h10m) · codex 82% (2h42m)  (constrained)
 ```
 
-- Model + effort in the accent color; the place segment in gray shows the
-  repo and its git state: `􀐞 repo 􀜞` (repo icon, then a state symbol —
+- The place segment leads, in the repo's theme accent color: the repo and its
+  git state: `􀐞 repo 􀜞` (repo icon, then a state symbol —
   main/clean, main/modified `􀧙`, branch/clean `􀣽` + branch name,
   branch/modified `􀫲`, PR in review `􀩄`, PR checks green `􀁣`). When a PR
   exists, the branch name is followed by `#N` — an OSC 8 hyperlink to the PR
@@ -65,6 +65,10 @@ opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
   network. Outside a git repo it's the ~-shortened
   path. The symbols are SF Symbols (macOS); on other platforms — or with
   `statusline_git_symbols: "ascii"` — a plain unicode set is used.
+- Model + effort (the session's, and each running subagent's) are color-coded
+  by effort: low yellow, medium green, high light purple, xhigh purple, and
+  max renders as a rainbow gradient that shimmers as the statusline repaints.
+  Separators, badges, and the codex label are gray.
 - Below `statusline_show_pct` (default 75) on both providers: no numbers at
   all. The moment either crosses it, both providers' most-pressured windows
   appear — your usage and the alternative, in one glance.
@@ -74,8 +78,8 @@ opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
   (within 8 hours) — a weekly window days from reset shows just the number.
 - `~` means the number is stale; `--` means unknown.
 - A leading `⏾` means a capped session is hibernating.
-- Running subagents appear as numbered badges with model and effort:
-  `􀃋 sonnet high  􀃍 sol xhigh`. Claude launches are tracked by the Agent-tool
+- Running subagents appear last, as gray numbered badges with effort-colored
+  model + effort: `􀃋 sonnet high  􀃍 sol xhigh`. Claude launches are tracked by the Agent-tool
   hooks (PreToolUse registers, PostToolUse/SubagentStop/SessionEnd clean up,
   a 2-hour TTL scrubs crash leftovers); Codex runs are detected from rollout
   files written in the last two minutes, with model and effort read from the

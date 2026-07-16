@@ -24,7 +24,7 @@ sl._effort = lambda: "high"
 MOJITO_GREEN, SHOP_INDIGO = "#4cb782", "#5e6ad2"
 
 
-def render(accent, place, five, codex, mins, codex_mins, hibernating, agents=""):
+def render(accent, place, five, codex, mins, codex_mins, hibernating, agents=()):
     now = time.time()
     cache = {"five_hour": {"used_percentage": five, "observed_at": now,
                            "present_in_latest_payload": True,
@@ -36,7 +36,7 @@ def render(accent, place, five, codex, mins, codex_mins, hibernating, agents="")
                "workspace": {"current_dir": "/x"}}
     sl._accent_hex = lambda cfg, cwd, _a=accent: _a
     sl._git_segment = lambda cwd, cfg, _p=place: _p
-    sl._agents_segment = lambda cache, now, eff, _a=agents: _a
+    sl._agents_entries = lambda cache, now, eff, _a=agents: list(_a)
     sl._load_json_from_probe = lambda: {
         "available": True, "snapshot_age_seconds": 5, "windows": {
             "short": {"present": False},
@@ -60,7 +60,7 @@ STATES = [
     ("past the gate: subagents fan out to codex; PR in review",
      dict(accent=SHOP_INDIGO, place="􀐞 shop 􀩄 pay-links #4",
           five=91, codex=27, mins=84, codex_mins=6000, hibernating=False,
-          agents="􀃋 sonnet high  􀃍 sol xhigh")),
+          agents=(("fable-5", "max"), ("sol", "xhigh")))),
     ("capped mid-task -> hibernating until reset",
      dict(accent=SHOP_INDIGO, place="􀐞 shop 􀩄 pay-links #4",
           five=99, codex=34, mins=22, codex_mins=162, hibernating=True)),

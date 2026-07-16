@@ -346,6 +346,35 @@ CODEX_SESSIONS = os.path.join(HOME, ".codex", "sessions")
 CODEX_ACTIVE_SECONDS = 120
 AGENT_BADGE_BASE = 0x1000CB  # SF Symbols 1.square.fill, +2 per digit
 EFFORT_LABELS = ("low", "medium", "high", "xhigh", "max")
+GRAY, WHITE = "\033[38;5;247m", "\033[97m"
+EFFORT_COLORS = {"low": "\033[33m",                    # yellow
+                 "medium": "\033[32m",                 # green
+                 "high": "\033[38;2;179;153;255m",     # light purple
+                 "xhigh": "\033[38;2;124;58;237m"}     # purple
+                                                       # max: rainbow
+
+
+def _rainbow(text, now):
+    """Per-character hue gradient; the phase rotates with `now`, so the text
+    shimmers across statusline repaints. As animated as a statusline gets."""
+    import colorsys
+    out = []
+    n = max(1, len(text))
+    for i, ch in enumerate(text):
+        hue = (now / 3.0 + i / n) % 1.0
+        r, g, b = (int(v * 255) for v in colorsys.hsv_to_rgb(hue, 0.8, 1.0))
+        out.append(f"\033[38;2;{r};{g};{b}m{ch}")
+    return "".join(out) + RESET
+
+
+def _effort_paint(text, effort, now, color_on):
+    if not color_on:
+        return text
+    e = str(effort or "").lower()
+    if e == "max":
+        return _rainbow(text, now)
+    code = EFFORT_COLORS.get(e)
+    return f"{code}{text}{RESET}" if code else text
 
 
 def _badge(n):
@@ -380,9 +409,9 @@ def _codex_active(now):
     return out
 
 
-def _agents_segment(cache, now, session_effort):
-    """`􀃋 sonnet high  􀃍 sol xhigh` — one numbered badge per running
-    subagent (Claude registry first, then live Codex runs), model, effort."""
+def _agents_entries(cache, now, session_effort):
+    """(model, effort) per running subagent — Claude registry first, then
+    live Codex runs."""
     entries = []
     reg = _load_json(AGENTS, [])
     if isinstance(reg, list):
@@ -397,13 +426,19 @@ def _agents_segment(cache, now, session_effort):
             entries.append((str(model), session_effort))
     for c in _codex_active(now):
         entries.append((c["model"].split("-")[-1], c.get("effort")))
+    return entries
+
+
+def _agents_segment(cache, now, session_effort, color_on=False):
+    """`􀃋 sonnet high  􀃍 sol xhigh` — gray numbered badge per running
+    subagent, model + effort painted in the effort's color."""
+    entries = _agents_entries(cache, now, session_effort)
     parts = []
     for i, (model, effort) in enumerate(entries[:9], 1):
-        s = f"{_badge(i)} {model}"
         label = str(effort or "").lower()
-        if label in EFFORT_LABELS:
-            s += f" {label}"
-        parts.append(s)
+        text = f"{model} {label}" if label in EFFORT_LABELS else model
+        badge = f"{GRAY}{_badge(i)}{RESET}" if color_on else _badge(i)
+        parts.append(badge + " " + _effort_paint(text, label, now, color_on))
     if len(entries) > 9:
         parts.append(f"+{len(entries) - 9}")
     return "  ".join(parts)
@@ -448,8 +483,6 @@ def _render_minimal(cache, config, now, payload):
     five_thr = config.get("fivehour_soft_pct", 85)
     ttl = config.get("claude_cache_ttl_seconds", 90)
     old_secs = config.get("codex_old_snapshot_seconds", 1800)
-    GRAY, WHITE = "\033[38;5;247m", "\033[97m"
-
     def c(code, text):
         return f"{code}{text}{RESET}" if color_on and code else text
 
@@ -509,16 +542,17 @@ def _render_minimal(cache, config, now, payload):
     constrained = (cl and cl[0] >= show_thr) or (cx and cx[0] >= show_thr)
 
     parts = []
-    if constrained:
-        parts.append(c(accent, head) + " " + pct_str(cl) if cl else c(accent, head))
-        parts.append(c(WHITE, "codex") + " " + (pct_str(cx) if cx else "--"))
-    else:
-        parts.append(c(accent, head))
-    agents = _agents_segment(cache, now, effort)
-    if agents:
-        parts.append(c(WHITE, agents))
     if place:
-        parts.append(c(GRAY, place))
+        parts.append(c(accent, place))
+    head_painted = _effort_paint(head, effort, now, color_on)
+    if constrained:
+        parts.append(head_painted + " " + pct_str(cl) if cl else head_painted)
+        parts.append(c(GRAY, "codex") + " " + (pct_str(cx) if cx else "--"))
+    else:
+        parts.append(head_painted)
+    agents = _agents_segment(cache, now, effort, color_on)
+    if agents:
+        parts.append(agents)
     prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
     return prefix + c(GRAY, " · ").join(parts) if color_on \
         else prefix + " · ".join(parts)
@@ -897,7 +931,24 @@ def _self_test():
             la = _render(low, cfgm, now, payload)
         finally:
             _load_json_from_probe = saved
-        check("agents_in_render", "􀃋 sonnet" in la and "sol" in la)
+        check("agents_in_render", "􀃋" in la and "sonnet" in la and "sol" in la)
+
+        # effort color palette on agents; gray badges
+        seg_c = _agents_segment(cache_meta, now, "high", True)
+        check("agents_effort_colors",
+              EFFORT_COLORS["high"] + "sonnet high" in seg_c
+              and EFFORT_COLORS["xhigh"] + "sol xhigh" in seg_c
+              and GRAY + "􀃋" in seg_c)
+
+        # rainbow max: truecolor per char, shimmers with time, off when uncolored
+        r1 = _effort_paint("fable-5 max", "max", 100, True)
+        r2 = _effort_paint("fable-5 max", "max", 101, True)
+        check("rainbow_max", "\033[38;2;" in r1 and r1 != r2
+              and _effort_paint("x", "max", 5, False) == "x")
+
+        # order: place · model · agents
+        check("minimal_order",
+              la.index("~/projects") < la.index("opus-4.8") < la.index("􀃋"))
         os.unlink(AGENTS)
         _codex_active = lambda now: []
         _effort, AGENTS, _codex_active = saved_eff, saved_agents, saved_cact
