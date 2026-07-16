@@ -83,6 +83,25 @@ def _limit_text(evt):
     return "\n".join(parts)
 
 
+def _hard_capped(cfg, now):
+    """Message-independent cap detection: field evidence (2026-07-16) shows
+    Claude Code's limit banner never reaches Stop/Notification hooks, but the
+    quota cache reads 100% at cap. Any event while a window sits at/above
+    hibernate_arm_pct with a future reset means this session is capped."""
+    arm = cfg.get("hibernate_arm_pct", 99.5)
+    max_wait = cfg.get("hibernate_max_wait_hours", 12) * 3600
+    cache = _load(CACHE, {})
+    for key in ("five_hour", "seven_day"):
+        w = cache.get(key)
+        if not isinstance(w, dict):
+            continue
+        used, ra = w.get("used_percentage"), w.get("resets_at")
+        if isinstance(used, (int, float)) and used >= arm \
+                and isinstance(ra, (int, float)) and 0 < ra - now <= max_wait:
+            return True
+    return False
+
+
 def _arm_window(cfg, now):
     """Return (resets_at, window_name) only if a window is actually near its
     cap and resets within the max wait. Otherwise the limit phrase was noise."""
@@ -122,9 +141,9 @@ def main():
         age = time.time() - old.get("armed_at", 0)
         if age <= cfg.get("hibernate_max_wait_hours", 12) * 3600:
             return 0
-    if not LIMIT_RE.search(_limit_text(evt)):
-        return 0
     now = time.time()
+    if not (LIMIT_RE.search(_limit_text(evt)) or _hard_capped(cfg, now)):
+        return 0
     resets_at, window = _arm_window(cfg, now)
     if resets_at is None:
         return 0
@@ -176,7 +195,7 @@ def _self_test():
             return False
         if os.path.exists(MARKER):
             return False
-        if not LIMIT_RE.search(_limit_text(evt)):
+        if not (LIMIT_RE.search(_limit_text(evt)) or _hard_capped(cfg, time.time())):
             return False
         ra, window = _arm_window(cfg, time.time())
         if ra is None:
@@ -236,6 +255,20 @@ def _self_test():
         check("armed_from_transcript_tail", run_event(
             {"hook_event_name": "Stop", "transcript_path": tp}))
         os.unlink(MARKER)
+
+        # 5b. NO limit text anywhere, but the cache shows a hard cap -> armed
+        # (the real-world case: the limit banner never reaches hooks)
+        write(CACHE, {"five_hour": {"used_percentage": 100.0, "resets_at": now + 900}})
+        check("armed_on_hard_cap", run_event({"hook_event_name": "Stop"}))
+        os.unlink(MARKER)
+
+        # 5c. high but below hibernate_arm_pct, no limit text -> not armed
+        write(CACHE, {"five_hour": {"used_percentage": 97.0, "resets_at": now + 900}})
+        check("not_armed_below_arm_pct", not run_event({"hook_event_name": "Stop"}))
+
+        # 5d. capped but reset already passed -> nothing to wait for
+        write(CACHE, {"five_hour": {"used_percentage": 100.0, "resets_at": now - 60}})
+        check("not_armed_after_rollover", not run_event({"hook_event_name": "Stop"}))
 
         # 6. hibernate disabled -> never armed
         write(CONFIG, {"hibernate_enabled": False})

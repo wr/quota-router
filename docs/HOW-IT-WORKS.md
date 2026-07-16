@@ -119,10 +119,13 @@ Claude Code has no native "wait for the limit to reset and keep going" — when
 the window caps out, the session stops and waits for you. With
 `hibernate_enabled: true`, quota-router babysits instead:
 
-1. A Stop/Notification hook spots the usage-limit stop. Detection is
-   two-factor: the event text has to look like a limit message AND the quota
-   cache has to confirm a window really is near its cap — so a session that
-   merely *talks about* usage limits can't trigger it.
+1. A Stop/Notification hook spots the cap. The reliable trigger is the quota
+   cache: Claude Code's limit banner never reaches hooks (verified in the
+   field), but the cache reads 100% at cap — so any Stop/Notification while a
+   window sits at/above `hibernate_arm_pct` (default 99.5) with a future
+   reset arms hibernation. A limit-looking message in the event text also
+   arms, when one ever shows up. Either way the cache must confirm real
+   pressure, so a session merely *talking about* limits can't trigger it.
 2. It writes a hibernation marker (session id, tmux pane, reset time — which
    the cache already knows) and spawns a detached watchdog. The statusline
    shows `⏾`.
@@ -130,6 +133,10 @@ the window caps out, the session stops and waits for you. With
    continue prompt into the original tmux pane if it's still alive (your
    visible session just picks back up), else falls back to
    `claude --resume <session-id>`.
+
+Messages you send while capped are covered too: each one fires a Stop event
+that arms hibernation if nothing had yet, and the resume prompt tells the
+session to answer anything you left before continuing its task.
 
 `hibernate_watchdog.py --status` shows what's armed, `--disarm` cancels,
 `--dry-run` previews what a firing would do.

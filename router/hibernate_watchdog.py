@@ -26,8 +26,9 @@ MARKER = os.path.join(ROUTER, "hibernate.json")
 ARCHIVE = os.path.join(ROUTER, "last-hibernate.json")
 LOG = os.path.join(ROUTER, "hibernate.log")
 
-RESUME_PROMPT = ("The usage-limit window has reset. Continue the task you were "
-                 "working on when the limit interrupted you.")
+RESUME_PROMPT = ("The usage-limit window has reset. First check for and respond "
+                 "to any messages I sent while you were capped, then continue "
+                 "the task you were working on when the limit interrupted you.")
 
 
 def _load(path, default):

@@ -132,6 +132,14 @@ node "$(ls ~/.claude/plugins/*/openai-codex/codex/*/scripts/codex-companion.mjs 
   the broker vanishes, stop waiting, re-read quota, and reroute once (do not wait forever —
   this is the failure mode that hung a run for an hour).
 
+## If THIS session hits its usage cap
+
+Do **not** self-schedule wakeups to wait out a quota window — ScheduleWakeup
+clamps at 1 hour, so you wake still-capped, stall, and never see the real
+reset. Stop cleanly instead: the hibernate watchdog arms off the quota cache
+and resumes this session just after the true reset (including responding to
+any messages the user left while you were capped).
+
 ## 429 / limit backstop
 
 On a provider limit error: mark that provider **binding for this decision** (re-read the
