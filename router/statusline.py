@@ -346,7 +346,7 @@ CODEX_SESSIONS = os.path.join(HOME, ".codex", "sessions")
 CODEX_ACTIVE_SECONDS = 120
 AGENT_BADGE_BASE = 0x1000CB  # SF Symbols 1.square.fill, +2 per digit
 EFFORT_GLYPHS = {"low": "\U00101270", "medium": "\U00101597",
-                 "high": "\U00101598", "xhigh": "\U001002E7", "max": "\U001002E7"}
+                 "high": "\U00101598", "xhigh": "\U001002E7", "max": "\U00101289"}
 
 
 def _badge(n):
