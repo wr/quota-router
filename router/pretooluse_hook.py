@@ -95,7 +95,10 @@ def _deregister(evt, scope):
             if hit and not hit[0].get("background"):
                 return [e for e in reg if e.get("id") != tid]
             return reg
-        mine = [e for e in reg if e.get("session_id") == sid] or reg
+        # strictly this session's entries: the registry is shared across
+        # instances, and falling back to the whole list would delete another
+        # session's agent (the TTL handles orphans instead)
+        mine = [e for e in reg if e.get("session_id") == sid]
         if mine:
             oldest = min(mine, key=lambda e: e.get("started_at", 0))
             return [e for e in reg if e is not oldest]
@@ -296,6 +299,11 @@ def _self_test():
                    "tool_input": {"model": "haiku"}})
         _deregister({"session_id": "s1"}, "oldest")
         check("subagentstop_removes_oldest", [e["id"] for e in reg()] == ["t3"])
+
+        # 4b. SubagentStop for a session with no entries must not touch
+        # other sessions' entries (multi-instance safety)
+        _deregister({"session_id": "other-instance"}, "oldest")
+        check("subagentstop_scoped_to_session", [e["id"] for e in reg()] == ["t3"])
 
         # 5. SessionEnd clears the session
         _register({"tool_use_id": "t4", "session_id": "s2", "tool_input": {}})

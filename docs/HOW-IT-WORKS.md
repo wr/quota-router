@@ -83,7 +83,11 @@ The default style is `minimal` — quota is invisible until it matters:
   hooks (PreToolUse registers, PostToolUse/SubagentStop/SessionEnd clean up,
   a 2-hour TTL scrubs crash leftovers); Codex runs are detected from rollout
   files written in the last two minutes, with model and effort read from the
-  file tail. Claude agents that don't set an explicit model show the session
+  file tail. Both sources are shared across every open Claude Code instance,
+  so each instance shows only its own agents: Claude entries are matched by
+  session id, Codex runs by the rollout's recorded cwd against the session's
+  cwd (same directory or one inside the other). When either side of a match
+  is unknown, the badge stays visible rather than silently vanishing. Claude agents that don't set an explicit model show the session
   model; their effort label is the session effort (agent definitions can
   override effort invisibly). Codex entries linger up to ~2 minutes after a
   run finishes.

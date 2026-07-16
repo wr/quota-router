@@ -36,7 +36,7 @@ def render(accent, place, five, codex, mins, codex_mins, hibernating, agents=())
                "workspace": {"current_dir": "/x"}}
     sl._accent_hex = lambda cfg, cwd, _a=accent: _a
     sl._git_segment = lambda cwd, cfg, _p=place: _p
-    sl._agents_entries = lambda cache, now, eff, _a=agents: list(_a)
+    sl._agents_entries = lambda *a, _a=agents, **k: list(_a)
     sl._load_json_from_probe = lambda: {
         "available": True, "snapshot_age_seconds": 5, "windows": {
             "short": {"present": False},

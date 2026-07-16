@@ -395,13 +395,16 @@ def _codex_active(now):
                     if now - os.path.getmtime(p) > CODEX_ACTIVE_SECONDS:
                         continue
                     with open(p, "rb") as f:
+                        head = f.read(4096).decode("utf-8", "replace")
                         f.seek(0, 2)
                         f.seek(max(0, f.tell() - 65536))
                         tail = f.read().decode("utf-8", "replace")
                     models = re.findall(r'"model":"([^"]+)"', tail)
                     efforts = re.findall(r'"effort":"([^"]+)"', tail)
+                    cwd = re.search(r'"cwd":"([^"]+)"', head)
                     out.append({"model": models[-1] if models else "codex",
-                                "effort": efforts[-1] if efforts else None})
+                                "effort": efforts[-1] if efforts else None,
+                                "cwd": cwd.group(1) if cwd else None})
                 except OSError:
                     continue
     except Exception:
@@ -409,14 +412,25 @@ def _codex_active(now):
     return out
 
 
-def _agents_entries(cache, now, session_effort):
+def _same_tree(a, b):
+    a = os.path.abspath(os.path.expanduser(a))
+    b = os.path.abspath(os.path.expanduser(b))
+    return a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep)
+
+
+def _agents_entries(cache, now, session_effort, session_id=None, cwd=None):
     """(model, effort) per running subagent — Claude registry first, then
-    live Codex runs."""
+    live Codex runs. Both sources are shared by every Claude Code instance,
+    so entries are scoped to the rendering session: Claude registry entries
+    by session id, Codex runs by the rollout's cwd vs the session's cwd.
+    An unknown id/cwd on either side fails toward showing the entry."""
     entries = []
     reg = _load_json(AGENTS, [])
     if isinstance(reg, list):
         for e in sorted(reg, key=lambda x: x.get("started_at", 0)):
             if not isinstance(e, dict):
+                continue
+            if session_id and e.get("session_id") != session_id:
                 continue
             model = e.get("model")
             if not model:
@@ -425,14 +439,17 @@ def _agents_entries(cache, now, session_effort):
                     .replace("claude-", "").replace(" ", "-")
             entries.append((str(model), session_effort))
     for c in _codex_active(now):
+        if cwd and c.get("cwd") and not _same_tree(cwd, c["cwd"]):
+            continue
         entries.append((c["model"].split("-")[-1], c.get("effort")))
     return entries
 
 
-def _agents_segment(cache, now, session_effort, color_on=False):
+def _agents_segment(cache, now, session_effort, color_on=False,
+                    session_id=None, cwd=None):
     """`􀃋 sonnet high  􀃍 sol xhigh` — gray numbered badge per running
     subagent, model + effort painted in the effort's color."""
-    entries = _agents_entries(cache, now, session_effort)
+    entries = _agents_entries(cache, now, session_effort, session_id, cwd)
     parts = []
     for i, (model, effort) in enumerate(entries[:9], 1):
         label = str(effort or "").lower()
@@ -550,7 +567,8 @@ def _render_minimal(cache, config, now, payload):
         parts.append(c(GRAY, "codex") + " " + (pct_str(cx) if cx else "--"))
     else:
         parts.append(head_painted)
-    agents = _agents_segment(cache, now, effort, color_on)
+    sid = payload.get("session_id") if isinstance(payload, dict) else None
+    agents = _agents_segment(cache, now, effort, color_on, sid, cwd_raw)
     if agents:
         parts.append(agents)
     prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
@@ -760,7 +778,7 @@ def _self_test():
         check("hibernate_prefix", line4.startswith("⏾ "))
 
         # ---- minimal style ----
-        global _effort, AGENTS, _codex_active
+        global _effort, AGENTS, _codex_active, CODEX_SESSIONS
         saved_eff, saved_agents, saved_cact = _effort, AGENTS, _codex_active
         _effort = lambda: "high"
         AGENTS = os.path.join(d, "agents.json")  # not created yet: no agents
@@ -949,7 +967,58 @@ def _self_test():
         # order: place · model · agents
         check("minimal_order",
               la.index("~/projects") < la.index("opus-4.8") < la.index("􀃋"))
+
+        # session scoping: an instance shows only its own session's agents;
+        # no session id (old payloads, demo) falls back to showing all
+        with open(AGENTS, "w") as f:
+            json.dump([{"id": "a", "session_id": "s1", "model": "sonnet",
+                        "background": True, "started_at": now},
+                       {"id": "b", "session_id": "s2", "model": "haiku",
+                        "background": True, "started_at": now + 1}], f)
+        _codex_active = lambda now: []
+        seg_s1 = _agents_segment(cache_meta, now, "high", session_id="s1")
+        check("agents_session_scoped",
+              "sonnet" in seg_s1 and "haiku" not in seg_s1)
+        seg_all = _agents_segment(cache_meta, now, "high")
+        check("agents_no_session_shows_all",
+              "sonnet" in seg_all and "haiku" in seg_all)
+        _load_json_from_probe = lambda: {"available": False}
+        try:
+            ls2 = _render(low, cfgm, now, dict(payload, session_id="s2"))
+        finally:
+            _load_json_from_probe = saved
+        check("render_scopes_agents_by_session",
+              "haiku" in ls2 and "sonnet" not in ls2)
         os.unlink(AGENTS)
+
+        # codex runs are scoped by cwd (from the rollout's session_meta) when
+        # both sides are known; unknown on either side keeps the badge visible
+        _codex_active = lambda now: [{"model": "gpt-5.6-sol", "effort": "xhigh",
+                                      "cwd": "/repo/a"}]
+        check("codex_scoped_by_cwd",
+              "sol" not in _agents_segment({}, now, "high", cwd="/repo/b"))
+        check("codex_cwd_prefix_match",
+              "sol" in _agents_segment({}, now, "high", cwd="/repo/a/sub"))
+        check("codex_unknown_cwd_shows",
+              "sol" in _agents_segment({}, now, "high"))
+
+        # the real _codex_active reads model/effort from the tail and cwd
+        # from the head of a rollout file
+        saved_cs = CODEX_SESSIONS
+        try:
+            CODEX_SESSIONS = os.path.join(d, "codex-sessions")
+            day = os.path.join(CODEX_SESSIONS, "2026", "07", "16")
+            os.makedirs(day)
+            with open(os.path.join(day, "rollout-x.jsonl"), "w") as f:
+                f.write('{"type":"session_meta","payload":{"cwd":"/repo/a"}}\n')
+                f.write('{"payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}\n')
+            runs = saved_cact(time.time())
+            check("codex_active_parses_cwd",
+                  bool(runs) and runs[0].get("cwd") == "/repo/a"
+                  and runs[0]["model"] == "gpt-5.6-sol"
+                  and runs[0]["effort"] == "xhigh")
+        finally:
+            CODEX_SESSIONS = saved_cs
         _codex_active = lambda now: []
         _effort, AGENTS, _codex_active = saved_eff, saved_agents, saved_cact
 
