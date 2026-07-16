@@ -11,6 +11,10 @@ jobs:
         run: python3 router/codex_quota_probe.py --self-test
       - name: statusline self-test
         run: python3 router/statusline.py --self-test
+      - name: hibernate hook self-test
+        run: python3 router/hibernate_hook.py --self-test
+      - name: hibernate watchdog self-test
+        run: python3 router/hibernate_watchdog.py --self-test
       - name: hook smoke test
         run: |
           echo '{"tool_name":"Agent"}' | python3 router/pretooluse_hook.py \

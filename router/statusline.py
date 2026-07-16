@@ -29,6 +29,7 @@ CACHE = os.path.join(HOME, ".claude", "quota-cache.json")
 LOCK = os.path.join(HOME, ".claude", "quota-cache.lock")
 CONFIG = os.path.join(ROUTER_DIR, "config.json")
 PROBE = os.path.join(ROUTER_DIR, "codex_quota_probe.py")
+HIBERNATE_MARKER = os.path.join(ROUTER_DIR, "hibernate.json")
 
 
 def _load_json(path, default):
@@ -128,7 +129,35 @@ def _fmt_reset_suffix(minutes):
     return f"({m // 60}h{m % 60:02d}m)" if m >= 60 else f"({m}m)"
 
 
-def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr):
+# statusline_style config values. "plain" = numbers only.
+STYLE_RAMPS = {
+    "circles": "○◔◑◕●",
+    "braille": "⡀⡄⡆⡇⣇⣧⣷⣿",
+}
+RED, YELLOW, RESET = "\033[1;31m", "\033[33m", "\033[0m"
+
+
+def _glyph(style, pct):
+    ramp = STYLE_RAMPS.get(style, "")
+    if not ramp or not isinstance(pct, (int, float)):
+        return ""
+    # nearest level, so 15% reads as a quarter circle rather than empty
+    idx = int(round(max(0.0, min(100.0, float(pct))) * (len(ramp) - 1) / 100.0))
+    return ramp[idx]
+
+
+def _paint(text, pct, thr, color_on):
+    """Yellow approaching a window's own threshold, red+bold past it."""
+    if not color_on or not isinstance(pct, (int, float)):
+        return text
+    if pct > thr:
+        return RED + text + RESET
+    if pct >= thr - 10:
+        return YELLOW + text + RESET
+    return text
+
+
+def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr, style="plain", color_on=False):
     if not probe.get("available"):
         return "Codex --"
     parts = []
@@ -143,7 +172,9 @@ def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr):
         flag = ""
         if w["used_percent"] > thr:
             flag = "!" + _fmt_reset_suffix(w.get("minutes_to_reset"))
-        parts.append(f"{label} {int(round(w['used_percent']))}%{flag}{mark}")
+        chunk = _glyph(style, w["used_percent"]) \
+            + f"{int(round(w['used_percent']))}%{flag}{mark}"
+        parts.append(f"{label} " + _paint(chunk, w["used_percent"], thr, color_on))
     return "Codex " + (" ".join(parts) if parts else "--")
 
 
@@ -152,6 +183,8 @@ def _render(cache, config, now):
     old_secs = config.get("codex_old_snapshot_seconds", 1800)
     weekly_thr = config.get("weekly_protect_pct", 75)
     five_thr = config.get("fivehour_soft_pct", 85)
+    style = config.get("statusline_style", "plain")
+    color_on = bool(config.get("statusline_color", False))
 
     # binding flags (display only)
     def binding(win, thr):
@@ -161,17 +194,19 @@ def _render(cache, config, now):
     def claude_part(key, thr):
         win = cache.get(key)
         text = _fmt_pct(win, now, ttl)
+        pct = win.get("used_percentage") if isinstance(win, dict) else None
         if binding(win, thr):
             mtr = (win["resets_at"] - now) / 60 \
                 if isinstance(win.get("resets_at"), (int, float)) else None
             text += "!" + _fmt_reset_suffix(mtr)
-        return text
+        return _paint(_glyph(style, pct) + text, pct, thr, color_on)
 
     five = claude_part("five_hour", five_thr)
     seven = claude_part("seven_day", weekly_thr)
     probe = _load_json_from_probe()
-    codex = _fmt_codex(probe, now, old_secs, weekly_thr, five_thr)
-    return f"Claude 5h {five} / 7d {seven} · {codex}"
+    codex = _fmt_codex(probe, now, old_secs, weekly_thr, five_thr, style, color_on)
+    prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
+    return f"{prefix}Claude 5h {five} / 7d {seven} · {codex}"
 
 
 def _load_json_from_probe():
@@ -308,11 +343,69 @@ def _self_test():
             _load_json_from_probe = saved
         check("codex_binding_countdown", "wk 91%!(8h20m)" in line2)
 
+        # circles style + color: glyph before the number, red past threshold,
+        # no color below thr-10
+        cfgc = dict(cfg, statusline_style="circles", statusline_color=True)
+        _load_json_from_probe = lambda: {"available": False}
+        try:
+            line3 = _render(cache, cfgc, now)
+        finally:
+            _load_json_from_probe = saved
+        check("circle_glyph_and_red", "●88%!(34m)" in line3 and RED + "●88%" in line3)
+        check("low_window_uncolored", "◑40%~" in line3 and YELLOW + "◑40%" not in line3)
+        check("glyph_nearest_level", _glyph("circles", 15) == "◔"
+              and _glyph("braille", 88) == "⣷" and _glyph("braille", 5) == "⡀"
+              and _glyph("circles", 100) == "●" and _glyph("circles", 0) == "○")
+
+        # hibernate marker prefix
+        global HIBERNATE_MARKER
+        saved_marker = HIBERNATE_MARKER
+        HIBERNATE_MARKER = os.path.join(d, "hibernate.json")
+        with open(HIBERNATE_MARKER, "w") as f:
+            f.write("{}")
+        _load_json_from_probe = lambda: {"available": False}
+        try:
+            line4 = _render(cache, cfg, now)
+        finally:
+            _load_json_from_probe = saved
+            HIBERNATE_MARKER = saved_marker
+        check("hibernate_prefix", line4.startswith("⏾ "))
+
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
+
+
+def _demo():
+    """Render sample lines at three pressure levels in every style, with color,
+    so a style can be chosen by looking rather than imagining."""
+    global _load_json_from_probe
+    now = time.time()
+    scenarios = [("cruising", 34, 12, 15), ("warming", 78, 68, 35), ("binding", 92, 71, 88)]
+    saved = _load_json_from_probe
+    for style in ("plain", "circles", "braille"):
+        print(f"[{style}]")
+        for name, five, seven, codex in scenarios:
+            cache = {"five_hour": {"used_percentage": five, "observed_at": now,
+                                   "present_in_latest_payload": True, "resets_at": now + 34 * 60},
+                     "seven_day": {"used_percentage": seven, "observed_at": now,
+                                   "present_in_latest_payload": True, "resets_at": now + 3000 * 60}}
+            cfg = {"statusline_style": style, "statusline_color": True}
+            _load_json_from_probe = lambda c=codex: {
+                "available": True, "snapshot_age_seconds": 5, "windows": {
+                    "short": {"present": False},
+                    "long": {"present": True, "routing_available": True,
+                             "used_percent": float(c), "minutes_to_reset": 4000}}}
+            try:
+                print(f"  {name:9s} {_render(cache, cfg, now)}")
+            finally:
+                _load_json_from_probe = saved
+        print()
+    return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         sys.exit(_self_test())
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+        sys.exit(_demo())
     sys.exit(main())

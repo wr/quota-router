@@ -47,14 +47,15 @@ if isinstance(sl, dict) and "quota-router/statusline.py" in str(sl.get("command"
         settings.pop("statusLine", None)
         print("removed statusLine")
 
-pre = settings.get("hooks", {}).get("PreToolUse")
-if isinstance(pre, list):
-    kept = [e for e in pre if "quota-router/pretooluse_hook.py" not in json.dumps(e)]
-    if len(kept) != len(pre):
-        settings["hooks"]["PreToolUse"] = kept
-        print("removed PreToolUse hook")
-    if not settings["hooks"].get("PreToolUse"):
-        settings["hooks"].pop("PreToolUse", None)
+for event in ("PreToolUse", "Stop", "Notification"):
+    arr = settings.get("hooks", {}).get(event)
+    if isinstance(arr, list):
+        kept = [e for e in arr if "quota-router/" not in json.dumps(e)]
+        if len(kept) != len(arr):
+            settings["hooks"][event] = kept
+            print(f"removed {event} hook")
+        if not settings["hooks"].get(event):
+            settings["hooks"].pop(event, None)
 
 tmp = settings_path + ".tmp"
 with open(tmp, "w") as f:

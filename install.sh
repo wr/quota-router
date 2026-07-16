@@ -24,6 +24,8 @@ chmod 700 "$ROUTER_DIR"
 install -m 700 "$REPO_DIR/router/codex_quota_probe.py" "$ROUTER_DIR/"
 install -m 700 "$REPO_DIR/router/statusline.py" "$ROUTER_DIR/"
 install -m 700 "$REPO_DIR/router/pretooluse_hook.py" "$ROUTER_DIR/"
+install -m 700 "$REPO_DIR/router/hibernate_hook.py" "$ROUTER_DIR/"
+install -m 700 "$REPO_DIR/router/hibernate_watchdog.py" "$ROUTER_DIR/"
 install -m 644 "$REPO_DIR/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
 
 if [ ! -f "$ROUTER_DIR/config.json" ]; then
@@ -51,7 +53,6 @@ if os.path.exists(settings_path):
 
 MARK = "quota-router/statusline.py"
 statusline_cmd = f'python3 "{router_dir}/statusline.py"'
-hook_cmd = f'python3 "{router_dir}/pretooluse_hook.py"'
 
 # Record a pre-existing status line so statusline.py wraps it (and uninstall
 # can restore it). Never record our own command as "previous".
@@ -73,13 +74,22 @@ settings["statusLine"] = {"type": "command", "command": statusline_cmd,
                           "refreshInterval": 30}
 
 hooks = settings.setdefault("hooks", {})
-pre = hooks.setdefault("PreToolUse", [])
-if not any("quota-router/pretooluse_hook.py" in json.dumps(e) for e in pre):
-    pre.append({"matcher": "Agent",
-                "hooks": [{"type": "command", "command": hook_cmd, "timeout": 10}]})
-    print("registered PreToolUse hook (matcher: Agent)")
-else:
-    print("PreToolUse hook already registered")
+
+def ensure_hook(event, script, matcher=None):
+    arr = hooks.setdefault(event, [])
+    if any(f"quota-router/{script}" in json.dumps(e) for e in arr):
+        print(f"{event} hook already registered")
+        return
+    entry = {"hooks": [{"type": "command",
+                        "command": f'python3 "{router_dir}/{script}"', "timeout": 10}]}
+    if matcher:
+        entry["matcher"] = matcher
+    arr.append(entry)
+    print(f"registered {event} hook" + (f" (matcher: {matcher})" if matcher else ""))
+
+ensure_hook("PreToolUse", "pretooluse_hook.py", matcher="Agent")
+ensure_hook("Stop", "hibernate_hook.py")
+ensure_hook("Notification", "hibernate_hook.py")
 
 tmp = settings_path + ".tmp"
 with open(tmp, "w") as f:
@@ -91,6 +101,8 @@ PY
 echo
 python3 "$ROUTER_DIR/codex_quota_probe.py" --self-test >/dev/null && echo "probe self-test: OK"
 python3 "$ROUTER_DIR/statusline.py" --self-test >/dev/null && echo "statusline self-test: OK"
+python3 "$ROUTER_DIR/hibernate_hook.py" --self-test >/dev/null && echo "hibernate hook self-test: OK"
+python3 "$ROUTER_DIR/hibernate_watchdog.py" --self-test >/dev/null && echo "hibernate watchdog self-test: OK"
 echo '{"tool_name":"Agent"}' | python3 "$ROUTER_DIR/pretooluse_hook.py" \
   | python3 -c "import json,sys; json.load(sys.stdin)" >/dev/null && echo "hook smoke test: OK"
 
