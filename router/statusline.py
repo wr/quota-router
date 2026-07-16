@@ -346,7 +346,7 @@ CODEX_SESSIONS = os.path.join(HOME, ".codex", "sessions")
 CODEX_ACTIVE_SECONDS = 120
 AGENT_BADGE_BASE = 0x1000CB  # SF Symbols 1.square.fill, +2 per digit
 EFFORT_GLYPHS = {"low": "\U00101270", "medium": "\U00101597",
-                 "high": "\U00101598", "xhigh": "\U00101598", "max": "\U00101598"}
+                 "high": "\U00101598", "xhigh": "\U001002E7", "max": "\U001002E7"}
 
 
 def _badge(n):
@@ -890,10 +890,10 @@ def _self_test():
         cache_meta = {"meta": {"model": "Fable 5"}}
         seg = _agents_segment(cache_meta, now, "high")
         check("agents_segment",
-              seg == "􀃋 sonnet 􁖘  􀃍 fable-5 􁖘  􀃏 sol 􁖘")
+              seg == "􀃋 sonnet 􁖘  􀃍 fable-5 􁖘  􀃏 sol 􀋧")
         seg2 = _agents_segment(cache_meta, now, "low")
         check("agents_effort_glyphs", "sonnet \U00101270" in seg2
-              and "sol \U00101598" in seg2)
+              and "sol \U001002E7" in seg2)
         _load_json_from_probe = lambda: {"available": False}
         try:
             la = _render(low, cfgm, now, payload)
