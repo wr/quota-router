@@ -53,7 +53,8 @@ def _update_agents(mutate):
             reg = []
         now = time.time()
         reg = [e for e in reg if isinstance(e, dict)
-               and now - e.get("started_at", 0) < AGENT_TTL]
+               and now - e.get("started_at", 0) < AGENT_TTL
+               and (e.get("id") or e.get("session_id"))]
         reg = mutate(reg, now)
         tmp = AGENTS + ".tmp"
         with open(tmp, "w") as f:
@@ -226,9 +227,14 @@ def main():
             pass
         return 0
 
+    if name != "PreToolUse":
+        # unknown/unparseable event: never fall through to registration
+        return 0
+
     # PreToolUse (matcher: Agent)
     try:
-        _register(evt)
+        if evt.get("tool_name") == "Agent" and evt.get("tool_use_id"):
+            _register(evt)
     except Exception:
         pass
     try:
@@ -304,6 +310,15 @@ def _self_test():
             json.dump(current + [stale], f)
         _update_agents(lambda r, now: r)
         check("ttl_scrub", [e["id"] for e in reg()] == ["t4"])
+
+        # 7. phantom entries (no id, no session) are scrubbed
+        current = reg()
+        with open(AGENTS, "w") as f:
+            json.dump(current + [{"id": None, "session_id": None,
+                                  "background": True,
+                                  "started_at": time.time()}], f)
+        _update_agents(lambda r, now: r)
+        check("phantom_scrubbed", [e["id"] for e in reg()] == ["t4"])
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
