@@ -198,6 +198,26 @@ def _effort():
     return e if isinstance(e, str) and e else None
 
 
+def _accent_hex(config, cwd):
+    """Per-repo accent. First hit wins: STATUSLINE_ACCENT env var, then a
+    `statusline_accent` key in .claude/settings.local.json or settings.json
+    walking up from the session's cwd, then the router config, then coral."""
+    env = os.environ.get("STATUSLINE_ACCENT")
+    if env:
+        return env
+    d = os.path.abspath(os.path.expanduser(cwd)) if cwd else ""
+    while d and d != "/":
+        for name in ("settings.local.json", "settings.json"):
+            v = _load_json(os.path.join(d, ".claude", name), {}).get("statusline_accent")
+            if isinstance(v, str) and v:
+                return v
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return config.get("statusline_accent", "#D97757")
+
+
 def _render_minimal(cache, config, now, payload):
     """`opus-4.8 high · ~/projects` — quota is invisible until a provider
     crosses statusline_show_pct; then both providers' numbers appear, with a
@@ -209,7 +229,6 @@ def _render_minimal(cache, config, now, payload):
     ttl = config.get("claude_cache_ttl_seconds", 90)
     old_secs = config.get("codex_old_snapshot_seconds", 1800)
     GRAY, WHITE = "\033[90m", "\033[97m"
-    accent = _hex_to_ansi(config.get("statusline_accent", "#D97757"))
 
     def c(code, text):
         return f"{code}{text}{RESET}" if color_on and code else text
@@ -225,9 +244,9 @@ def _render_minimal(cache, config, now, payload):
     model = model.lower().replace("claude-", "").replace(" ", "-")
     effort = _effort()
     head = model + (f" {effort}" if effort else "")
-    cwd = str(meta.get("cwd") or stored.get("cwd") or "")
-    if cwd.startswith(HOME):
-        cwd = "~" + cwd[len(HOME):]
+    cwd_raw = str(meta.get("cwd") or stored.get("cwd") or "")
+    accent = _hex_to_ansi(_accent_hex(config, cwd_raw))
+    cwd = "~" + cwd_raw[len(HOME):] if cwd_raw.startswith(HOME) else cwd_raw
 
     def claude_pick():
         best = None
@@ -547,6 +566,26 @@ def _self_test():
             _load_json_from_probe = saved
             _effort = saved_eff
         check("minimal_no_far_countdown", "78%" in lw and "(" not in lw)
+
+        # per-repo accent resolution: project settings beat global config
+        proj = os.path.join(d, "proj")
+        os.makedirs(os.path.join(proj, ".claude"))
+        with open(os.path.join(proj, ".claude", "settings.local.json"), "w") as f:
+            json.dump({"statusline_accent": "#6ab586"}, f)
+        saved_env = os.environ.pop("STATUSLINE_ACCENT", None)
+        try:
+            check("accent_from_project",
+                  _accent_hex({"statusline_accent": "#D97757"}, proj) == "#6ab586")
+            check("accent_walks_up",
+                  _accent_hex({}, os.path.join(proj, "src", "deep")) == "#6ab586")
+            check("accent_global_fallback",
+                  _accent_hex({"statusline_accent": "#123456"}, d) == "#123456")
+            os.environ["STATUSLINE_ACCENT"] = "#ffffff"
+            check("accent_env_wins", _accent_hex({}, proj) == "#ffffff")
+        finally:
+            os.environ.pop("STATUSLINE_ACCENT", None)
+            if saved_env:
+                os.environ["STATUSLINE_ACCENT"] = saved_env
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1

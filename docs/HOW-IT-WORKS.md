@@ -129,7 +129,7 @@ the window caps out, the session stops and waits for you. With
 | `statusline_style` | minimal | `minimal`, `braille`, `circles`, or `plain` |
 | `statusline_color` | true | ANSI colors on the readout |
 | `statusline_show_pct` | 75 | minimal style: hide quota below this, show both providers at it |
-| `statusline_accent` | #D97757 | minimal style: hex color for the model name |
+| `statusline_accent` | #D97757 | minimal style: hex color for the model name. Overridable per repo: `STATUSLINE_ACCENT` env var, or a `statusline_accent` key in the project's `.claude/settings.local.json` / `settings.json` (checked walking up from the session cwd) |
 | `hibernate_enabled` | false | Opt-in auto-resume after a usage-limit stop |
 | `hibernate_settle_seconds` | 90 | Extra wait past the reset before resuming |
 | `hibernate_max_wait_hours` | 12 | Never hibernate longer than this |
