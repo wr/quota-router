@@ -60,6 +60,11 @@ Tier table (quota permitting):
 | Mechanical | Haiku 5 low (inline only if a true one-liner) | gpt-5.3-codex-spark low |
 | Adversarial review | Claude only if Codex wrote it | Codex only if Claude wrote it |
 
+**Final pre-merge review is two jobs, not one:** the adversarial bug-hunt goes to the
+provider that did NOT write the branch (per-task reviews by same-provider subagents do
+not count as the cross-check); the orchestrator then judges the findings and makes the
+merge call. Never substitute the orchestrator's own re-read for the cross-provider pass.
+
 (The model names are whatever the two plans expose today — edit this table when
 yours differ. The gates below don't care what the tiers are called.)
 
