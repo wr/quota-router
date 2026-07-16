@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Claude Code status line: cache the pushed rate_limits, render a quota readout.
+
+Claude Code pipes its status JSON to this script on stdin every tick. We:
+  1. Extract only rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}
+     and store them (each window independently) in ~/.claude/quota-cache.json.
+  2. Render a one-line quota readout (Claude + Codex) to stdout.
+
+Concurrency-safe: unique temp + fsync + os.replace, under an flock, and a new
+tick never overwrites a window with an OLDER observation. An absent window is
+retained (marked not-present-in-latest), never zeroed. last_tick_at is tracked
+separately so a fresh empty tick can't make an old observation look fresh.
+
+If an existing status line was configured at install time, it is recorded in
+config.previous_statusline and wrapped (run with the original stdin under a
+short timeout), with our readout appended.
+"""
+import fcntl
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+ROUTER_DIR = os.path.join(HOME, ".claude", "quota-router")
+CACHE = os.path.join(HOME, ".claude", "quota-cache.json")
+LOCK = os.path.join(HOME, ".claude", "quota-cache.lock")
+CONFIG = os.path.join(ROUTER_DIR, "config.json")
+PROBE = os.path.join(ROUTER_DIR, "codex_quota_probe.py")
+
+
+def _load_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _extract_claude_windows(payload, now):
+    rl = payload.get("rate_limits") if isinstance(payload, dict) else None
+    out = {}
+    if isinstance(rl, dict):
+        for key in ("five_hour", "seven_day"):
+            w = rl.get(key)
+            if isinstance(w, dict) and isinstance(w.get("used_percentage"), (int, float)):
+                out[key] = {
+                    "used_percentage": float(w["used_percentage"]),
+                    "resets_at": w.get("resets_at"),
+                    "observed_at": now,
+                    "present_in_latest_payload": True,
+                }
+    return out
+
+
+def _update_cache(new_windows, now, cache_dir):
+    """Read-modify-write the cache under an flock. Carry forward windows absent
+    from this tick; never replace a stored window with an older observation."""
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        cache = _load_json(CACHE, {})
+        if not isinstance(cache, dict):
+            cache = {}
+        merged = {}
+        for key in ("five_hour", "seven_day"):
+            incoming = new_windows.get(key)
+            stored = cache.get(key) if isinstance(cache.get(key), dict) else None
+            if incoming and stored:
+                # reject an older observation than what's already stored
+                if incoming["observed_at"] >= stored.get("observed_at", 0):
+                    merged[key] = incoming
+                else:
+                    merged[key] = stored
+            elif incoming:
+                merged[key] = incoming
+            elif stored:
+                stored = dict(stored)
+                stored["present_in_latest_payload"] = False
+                merged[key] = stored
+        merged["last_tick_at"] = now
+        _atomic_write(CACHE, merged, cache_dir)
+        return merged
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+
+def _atomic_write(target, obj, cache_dir):
+    fd, tmp = tempfile.mkstemp(prefix=".quota-cache-", dir=cache_dir)
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(obj, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _fmt_pct(window, now, ttl):
+    if not isinstance(window, dict):
+        return "--"
+    used = window.get("used_percentage")
+    if not isinstance(used, (int, float)):
+        return "--"
+    age = now - window.get("observed_at", 0)
+    stale = (not window.get("present_in_latest_payload", False) and age > ttl)
+    return f"{int(round(used))}%" + ("~" if stale else "")
+
+
+def _fmt_reset_suffix(minutes):
+    """Countdown like (34m) or (8h20m). Shown only on binding windows — that's
+    when the wait-vs-switch call matters."""
+    if not isinstance(minutes, (int, float)):
+        return ""
+    m = int(max(0, minutes))
+    return f"({m // 60}h{m % 60:02d}m)" if m >= 60 else f"({m}m)"
+
+
+def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr):
+    if not probe.get("available"):
+        return "Codex --"
+    parts = []
+    for role, label, thr in (("short", "5h", five_thr), ("long", "wk", weekly_thr)):
+        w = probe.get("windows", {}).get(role, {})
+        if not w.get("present"):
+            continue
+        if not w.get("routing_available", True):
+            parts.append(f"{label} --")
+            continue
+        mark = "~" if probe.get("snapshot_age_seconds", 0) > old_secs else ""
+        flag = ""
+        if w["used_percent"] > thr:
+            flag = "!" + _fmt_reset_suffix(w.get("minutes_to_reset"))
+        parts.append(f"{label} {int(round(w['used_percent']))}%{flag}{mark}")
+    return "Codex " + (" ".join(parts) if parts else "--")
+
+
+def _render(cache, config, now):
+    ttl = config.get("claude_cache_ttl_seconds", 90)
+    old_secs = config.get("codex_old_snapshot_seconds", 1800)
+    weekly_thr = config.get("weekly_protect_pct", 75)
+    five_thr = config.get("fivehour_soft_pct", 85)
+
+    # binding flags (display only)
+    def binding(win, thr):
+        return isinstance(win, dict) and isinstance(win.get("used_percentage"), (int, float)) \
+            and win["used_percentage"] > thr
+
+    def claude_part(key, thr):
+        win = cache.get(key)
+        text = _fmt_pct(win, now, ttl)
+        if binding(win, thr):
+            mtr = (win["resets_at"] - now) / 60 \
+                if isinstance(win.get("resets_at"), (int, float)) else None
+            text += "!" + _fmt_reset_suffix(mtr)
+        return text
+
+    five = claude_part("five_hour", five_thr)
+    seven = claude_part("seven_day", weekly_thr)
+    probe = _load_json_from_probe()
+    codex = _fmt_codex(probe, now, old_secs, weekly_thr, five_thr)
+    return f"Claude 5h {five} / 7d {seven} · {codex}"
+
+
+def _load_json_from_probe():
+    try:
+        out = subprocess.run(
+            [sys.executable, PROBE], capture_output=True, text=True, timeout=4)
+        return json.loads(out.stdout) if out.stdout.strip() else {"available": False}
+    except Exception:
+        return {"available": False}
+
+
+def _maybe_wrap_previous(config, raw_stdin):
+    prev = config.get("previous_statusline")
+    if not isinstance(prev, dict):
+        return None
+    cmd = prev.get("command")
+    if not cmd:
+        return None
+    # avoid self-recursion by resolved path
+    try:
+        if os.path.realpath(cmd) == os.path.realpath(__file__):
+            return None
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(cmd, shell=True, input=raw_stdin, capture_output=True,
+                             text=True, timeout=1)
+        line = out.stdout.strip()
+        return line or None
+    except Exception:
+        return None
+
+
+def main():
+    now = time.time()
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    payload = _load_json_from_str(raw)
+    config = _load_json(CONFIG, {})
+    cache_dir = os.path.dirname(CACHE)
+    try:
+        windows = _extract_claude_windows(payload, now)
+        cache = _update_cache(windows, now, cache_dir)
+    except Exception:
+        cache = _load_json(CACHE, {})  # degrade: still render from last cache
+    readout = _render(cache, config, now)
+    prev_line = _maybe_wrap_previous(config, raw)
+    sys.stdout.write((prev_line + "  " if prev_line else "") + readout)
+    return 0
+
+
+def _load_json_from_str(s):
+    try:
+        return json.loads(s) if s.strip() else {}
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# self-test
+# ---------------------------------------------------------------------------
+def _self_test():
+    global CACHE, LOCK
+    import io
+    passed = failed = 0
+
+    def check(name, cond):
+        nonlocal passed, failed
+        print(("PASS " if cond else "FAIL ") + name)
+        if cond:
+            passed += 1
+        else:
+            failed += 1
+
+    with tempfile.TemporaryDirectory() as d:
+        CACHE = os.path.join(d, "quota-cache.json")
+        LOCK = os.path.join(d, "quota-cache.lock")
+        now = 1_800_000_000
+
+        # both windows present
+        p = {"rate_limits": {
+            "five_hour": {"used_percentage": 64, "resets_at": now + 1000},
+            "seven_day": {"used_percentage": 71, "resets_at": now + 500000}}}
+        c = _update_cache(_extract_claude_windows(p, now), now, d)
+        check("both_present", c["five_hour"]["used_percentage"] == 64
+              and c["seven_day"]["used_percentage"] == 71)
+        check("perms_0600", (os.stat(CACHE).st_mode & 0o777) == 0o600)
+
+        # next tick omits five_hour -> retained, marked not-present
+        p2 = {"rate_limits": {"seven_day": {"used_percentage": 72, "resets_at": now + 500000}}}
+        c = _update_cache(_extract_claude_windows(p2, now + 60), now + 60, d)
+        check("absent_window_retained", c["five_hour"]["used_percentage"] == 64
+              and c["five_hour"]["present_in_latest_payload"] is False)
+        check("absent_not_zeroed", c["five_hour"]["used_percentage"] != 0)
+        check("last_tick_advanced", c["last_tick_at"] == now + 60)
+
+        # older observation must not overwrite newer stored
+        old = _extract_claude_windows(
+            {"rate_limits": {"seven_day": {"used_percentage": 5, "resets_at": now}}}, now - 100)
+        c = _update_cache(old, now - 100, d)
+        check("reject_older_observation", c["seven_day"]["used_percentage"] == 72)
+
+        # invalid input JSON doesn't crash extraction
+        check("invalid_json_safe", _extract_claude_windows(_load_json_from_str("{bad"), now) == {})
+
+        # atomic replace leaves no stray temp files
+        strays = [f for f in os.listdir(d) if f.startswith(".quota-cache-")]
+        check("no_stray_tmp", strays == [])
+
+        # display markers
+        cache = {"five_hour": {"used_percentage": 88, "observed_at": now,
+                               "present_in_latest_payload": True,
+                               "resets_at": now + 34 * 60},
+                 "seven_day": {"used_percentage": 40, "observed_at": now - 999,
+                               "present_in_latest_payload": False}}
+        cfg = {"claude_cache_ttl_seconds": 90, "fivehour_soft_pct": 85, "weekly_protect_pct": 75}
+        # bypass the real codex probe in render
+        global _load_json_from_probe
+        saved = _load_json_from_probe
+        _load_json_from_probe = lambda: {"available": False}
+        try:
+            line = _render(cache, cfg, now)
+        finally:
+            _load_json_from_probe = saved
+        check("stale_marker_and_binding", "88%!(34m)" in line and "40%~" in line)
+
+        # codex binding window gets flag + countdown
+        _load_json_from_probe = lambda: {"available": True, "snapshot_age_seconds": 10, "windows": {
+            "short": {"present": False},
+            "long": {"present": True, "routing_available": True,
+                     "used_percent": 91.0, "minutes_to_reset": 500}}}
+        try:
+            line2 = _render(cache, cfg, now)
+        finally:
+            _load_json_from_probe = saved
+        check("codex_binding_countdown", "wk 91%!(8h20m)" in line2)
+
+    print(f"\n{passed} passed, {failed} failed")
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        sys.exit(_self_test())
+    sys.exit(main())

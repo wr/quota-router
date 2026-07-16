@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "fable_available_on_plan": false,
+  "claude_cache_ttl_seconds": 90,
+  "codex_old_snapshot_seconds": 1800,
+  "decision_horizon_minutes": 90,
+  "weekly_protect_pct": 75,
+  "fivehour_soft_pct": 85,
+  "previous_statusline": null,
+  "test_override": null,
+  "_notes": {
+    "fable_available_on_plan": "Set true ONLY if a promo/frontier model (e.g. Fable) actually appears in Claude Code's model selector for this account. Entitlement flag only; live headroom is still gated automatically.",
+    "test_override": "For routing-matrix tests. Shape: {\"expires_epoch\": <unix secs, <=15min out>, \"claude\": {\"five_hour\": {\"used\": N, \"minutes_to_reset\": M}, \"seven_day\": {\"used\": N, \"minutes_to_reset\": M}}, \"codex\": {\"long\": {\"used\": N, \"minutes_to_reset\": M}, \"short\": null}}. Skill ignores expired overrides and labels active ones as TEST decisions.",
+    "previous_statusline": "Full prior statusLine object if one existed when this was installed, so it can be wrapped and restored. null if none. install.sh fills this in automatically."
+  }
+}
