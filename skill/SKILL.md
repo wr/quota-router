@@ -155,9 +155,16 @@ node "$(ls ~/.claude/plugins/*/openai-codex/codex/*/scripts/codex-companion.mjs 
 - Reserve **xhigh for bounded implementation with acceptance checks**; cap planning /
   exploration / open-ended debugging at **high**.
 - Poll with `... status <job-id>` / `... result <job-id>`; cancel with `... cancel <job-id>`.
+  Trust only the status command's own state/exit fields — never grep output or logs for
+  completion-sounding words; word-matching is what produces false "it's done" detections.
 - **Watchdog:** if the job exceeds its time budget + 2 min, or `status` stops advancing /
   the broker vanishes, stop waiting, re-read quota, and reroute once (do not wait forever —
   this is the failure mode that hung a run for an hour).
+- **Keep the plumbing out of chat.** Job ids, poll loops, watchdog arming/re-arming, broker
+  paths, and recoveries from your own polling mistakes are internal — the user should see
+  what's running and when results are expected ("Codex is reviewing the branch; findings in
+  ~20 min"), then the findings. Mention the machinery only when it changes what the user
+  gets: the job failed, was cancelled, or got rerouted.
 
 ## If THIS session hits its usage cap
 
