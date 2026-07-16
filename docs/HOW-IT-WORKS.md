@@ -58,9 +58,11 @@ opus-4.8 high 76% (2h10m) · codex 82% (2h42m) · ~/projects  (constrained)
 - Model + effort in the accent color; the place segment in gray shows the
   repo and its git state: `􀐞 repo 􀜞` (repo icon, then a state symbol —
   main/clean, main/modified `􀧙`, branch/clean `􀣽` + branch name,
-  branch/modified `􀫲`, PR in review `􀩄`, PR checks green `􀁣`). PR state is
-  cached for 3 minutes and refreshed by a detached background `gh` call, so
-  ticks never wait on the network. Outside a git repo it's the ~-shortened
+  branch/modified `􀫲`, PR in review `􀩄`, PR checks green `􀁣`). When a PR
+  exists, the branch name is followed by `#N` — an OSC 8 hyperlink to the PR
+  in terminals that support it. PR state is cached for 3 minutes and
+  refreshed by a detached background `gh` call, so ticks never wait on the
+  network. Outside a git repo it's the ~-shortened
   path. The symbols are SF Symbols (macOS); on other platforms — or with
   `statusline_git_symbols: "ascii"` — a plain unicode set is used.
 - Below `statusline_show_pct` (default 75) on both providers: no numbers at

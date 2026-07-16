@@ -243,7 +243,7 @@ def _pr_state(top, branch):
                              stdin=subprocess.DEVNULL, start_new_session=True)
         except Exception:
             pass
-    return entry.get("state") if isinstance(entry, dict) else None
+    return entry if isinstance(entry, dict) and entry.get("state") else None
 
 
 def _write_pr_cache(cache):
@@ -261,7 +261,7 @@ def _refresh_pr(top, branch):
     state = None
     try:
         out = subprocess.run(["gh", "pr", "view", branch,
-                              "--json", "state,statusCheckRollup"],
+                              "--json", "state,statusCheckRollup,number,url"],
                              cwd=top, capture_output=True, text=True, timeout=20)
         if out.returncode == 0:
             d = json.loads(out.stdout)
@@ -270,14 +270,15 @@ def _refresh_pr(top, branch):
                 good = ("SUCCESS", "NEUTRAL", "SKIPPED")
                 green = bool(rolls) and all(
                     (r.get("conclusion") or r.get("state")) in good for r in rolls)
-                state = "green" if green else "open"
+                state = {"state": "green" if green else "open",
+                         "number": d.get("number"), "url": d.get("url")}
     except Exception:
         pass
     now = time.time()
     cache = _load_json(PR_CACHE, {})
     if not isinstance(cache, dict):
         cache = {}
-    cache[f"{top}:{branch}"] = {"state": state, "checked_at": now}
+    cache[f"{top}:{branch}"] = dict(state or {"state": None}, checked_at=now)
     cache = {k: v for k, v in cache.items()
              if isinstance(v, dict) and now - v.get("checked_at", 0) < 86400}
     _write_pr_cache(cache)
@@ -304,9 +305,10 @@ def _git_segment(cwd, config):
     dirty = bool(_git(cwd, "status", "--porcelain"))
     on_main = branch in ("main", "master")
     pr = None if on_main else _pr_state(top, branch)
-    if pr == "green":
+    prstate = pr.get("state") if isinstance(pr, dict) else None
+    if prstate == "green":
         state = sym["pr_green"]
-    elif pr == "open":
+    elif prstate == "open":
         state = sym["pr_open"]
     elif dirty:
         state = sym["main_dirty"] if on_main else sym["branch_dirty"]
@@ -315,6 +317,14 @@ def _git_segment(cwd, config):
     seg = f"{sym['repo']} {os.path.basename(top)} {state}"
     if not on_main:
         seg += f" {branch}"
+        num = pr.get("number") if isinstance(pr, dict) else None
+        if prstate and num:
+            tag = f"#{num}"
+            url = pr.get("url")
+            if url:
+                # OSC 8 hyperlink; terminals without support just show the text
+                tag = f"\033]8;;{url}\033\\{tag}\033]8;;\033\\"
+            seg += f" {tag}"
     return seg
 
 
@@ -370,7 +380,7 @@ def _render_minimal(cache, config, now, payload):
     five_thr = config.get("fivehour_soft_pct", 85)
     ttl = config.get("claude_cache_ttl_seconds", 90)
     old_secs = config.get("codex_old_snapshot_seconds", 1800)
-    GRAY, WHITE = "\033[90m", "\033[97m"
+    GRAY, WHITE = "\033[38;5;247m", "\033[97m"
 
     def c(code, text):
         return f"{code}{text}{RESET}" if color_on and code else text
@@ -780,10 +790,13 @@ def _self_test():
             check("git_branch_dirty", _git_segment(repo, cfgg) == "􀐞 myrepo 􀫲 feat")
             git("commit", "-aqm", "wip")
             check("git_branch_clean", _git_segment(repo, cfgg) == "􀐞 myrepo 􀣽 feat")
-            _pr_state = lambda t, b: "open"
-            check("git_pr_open", _git_segment(repo, cfgg) == "􀐞 myrepo 􀩄 feat")
-            _pr_state = lambda t, b: "green"
-            check("git_pr_green", _git_segment(repo, cfgg) == "􀐞 myrepo 􀁣 feat")
+            _pr_state = lambda t, b: {"state": "open", "number": 4, "url": None}
+            check("git_pr_open", _git_segment(repo, cfgg) == "􀐞 myrepo 􀩄 feat #4")
+            _pr_state = lambda t, b: {"state": "green", "number": 4,
+                                      "url": "https://github.com/x/y/pull/4"}
+            seg = _git_segment(repo, cfgg)
+            check("git_pr_green_linked", seg.startswith("􀐞 myrepo 􀁣 feat ")
+                  and "\033]8;;https://github.com/x/y/pull/4\033\\#4\033]8;;\033\\" in seg)
             nongit = os.path.join(d, "plain")
             os.makedirs(nongit)
             check("git_fallback_path", _git_segment(nongit, cfgg) == nongit)

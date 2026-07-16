@@ -59,11 +59,11 @@ FRAMES = [
     ("5-hour window crosses 75%: both pools appear",
      SHOP_INDIGO, "􀐞 shop 􀫲 pay-links", 78, 21, 130, 6000, False, 3.2),
     ("past the gate -- new work routes to codex; PR in review",
-     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links", 91, 27, 84, 6000, False, 3.2),
+     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 91, 27, 84, 6000, False, 3.2),
     ("capped mid-task -> hibernating until reset",
-     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links", 99, 34, 22, 162, True, 3.2),
+     SHOP_INDIGO, "􀐞 shop 􀩄 pay-links #4", 99, 34, 22, 162, True, 3.2),
     ("window reset: session resumed -- PR checks green",
-     SHOP_INDIGO, "􀐞 shop 􀁣 pay-links", 4, 34, 289, 6000, False, 3.4),
+     SHOP_INDIGO, "􀐞 shop 􀁣 pay-links #4", 4, 34, 289, 6000, False, 3.4),
 ]
 
 for f in FRAMES:
