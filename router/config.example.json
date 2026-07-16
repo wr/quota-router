@@ -19,7 +19,7 @@
     "statusline_style": "minimal | braille | circles | plain. minimal shows `model effort · cwd` and reveals both providers' numbers only when one crosses statusline_show_pct; the others always show glyph+percentage gauges.",
     "statusline_color": "ANSI colors. minimal: accent on the model, gray path, yellow/red percentages. Gauges: yellow within 10 points of a window's threshold, red+bold past it.",
     "statusline_show_pct": "minimal style only: hide quota below this, show both providers at/above it.",
-    "statusline_accent": "minimal style only: hex color for the model name. Per-repo override: set STATUSLINE_ACCENT in the env, or a statusline_accent key in the project's .claude/settings.local.json (or settings.json) — checked walking up from the session cwd before falling back to this value.",
+    "statusline_accent": "minimal style only: fallback hex for the model name. Resolution, nearest first: STATUSLINE_ACCENT env var; then per project (walking up from the session cwd) an explicit statusline_accent key or a custom Claude Code theme (`theme: custom:<name>` -> ~/.claude/themes/<name>.json overrides.claude) in .claude/settings(.local).json; then the globally configured theme; then this value.",
     "hibernate_enabled": "Opt-in. When a usage-limit stop is detected AND the quota cache confirms a window is near cap, a watchdog waits out the reset and resumes the session (tmux send-keys into the original pane, else `claude --resume`). It types into your terminal — leave false unless you want that.",
     "hibernate_settle_seconds": "Extra seconds past the window reset before resuming.",
     "hibernate_max_wait_hours": "Never wait longer than this; stale hibernation markers are abandoned.",

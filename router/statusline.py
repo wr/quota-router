@@ -198,23 +198,48 @@ def _effort():
     return e if isinstance(e, str) and e else None
 
 
+THEMES_DIR = os.path.join(HOME, ".claude", "themes")
+
+
+def _theme_to_hex(theme):
+    """A Claude Code `theme` setting of custom:<name> maps to
+    ~/.claude/themes/<name>.json; overrides.claude is the accent slot."""
+    if not (isinstance(theme, str) and theme.startswith("custom:")):
+        return None
+    t = _load_json(os.path.join(THEMES_DIR, theme.split(":", 1)[1] + ".json"), {})
+    ov = t.get("overrides")
+    if not isinstance(ov, dict):
+        return None
+    v = ov.get("claude") or ov.get("promptBorder")
+    return v if isinstance(v, str) and v.startswith("#") else None
+
+
 def _accent_hex(config, cwd):
-    """Per-repo accent. First hit wins: STATUSLINE_ACCENT env var, then a
-    `statusline_accent` key in .claude/settings.local.json or settings.json
-    walking up from the session's cwd, then the router config, then coral."""
+    """Per-repo accent, nearest configuration wins: STATUSLINE_ACCENT env var,
+    then — walking up from the session's cwd — an explicit `statusline_accent`
+    key or the accent of a custom Claude Code theme in .claude settings, then
+    the globally configured theme, then the router config, then coral."""
     env = os.environ.get("STATUSLINE_ACCENT")
     if env:
         return env
     d = os.path.abspath(os.path.expanduser(cwd)) if cwd else ""
     while d and d != "/":
         for name in ("settings.local.json", "settings.json"):
-            v = _load_json(os.path.join(d, ".claude", name), {}).get("statusline_accent")
+            s = _load_json(os.path.join(d, ".claude", name), {})
+            v = s.get("statusline_accent")
             if isinstance(v, str) and v:
                 return v
+            t = _theme_to_hex(s.get("theme"))
+            if t:
+                return t
         parent = os.path.dirname(d)
         if parent == d:
             break
         d = parent
+    t = _theme_to_hex(
+        _load_json(os.path.join(HOME, ".claude", "settings.json"), {}).get("theme"))
+    if t:
+        return t
     return config.get("statusline_accent", "#D97757")
 
 
@@ -582,6 +607,29 @@ def _self_test():
                   _accent_hex({"statusline_accent": "#123456"}, d) == "#123456")
             os.environ["STATUSLINE_ACCENT"] = "#ffffff"
             check("accent_env_wins", _accent_hex({}, proj) == "#ffffff")
+            os.environ.pop("STATUSLINE_ACCENT", None)
+
+            # custom Claude Code theme provides the accent
+            global THEMES_DIR
+            saved_themes = THEMES_DIR
+            THEMES_DIR = os.path.join(d, "themes")
+            os.makedirs(THEMES_DIR)
+            with open(os.path.join(THEMES_DIR, "x.json"), "w") as f:
+                json.dump({"name": "X", "base": "dark",
+                           "overrides": {"claude": "#4cb782"}}, f)
+            proj2 = os.path.join(d, "proj2")
+            os.makedirs(os.path.join(proj2, ".claude"))
+            sl_path = os.path.join(proj2, ".claude", "settings.local.json")
+            with open(sl_path, "w") as f:
+                json.dump({"theme": "custom:x"}, f)
+            try:
+                check("accent_from_theme", _accent_hex({}, proj2) == "#4cb782")
+                with open(sl_path, "w") as f:
+                    json.dump({"theme": "custom:x",
+                               "statusline_accent": "#111111"}, f)
+                check("accent_key_beats_theme", _accent_hex({}, proj2) == "#111111")
+            finally:
+                THEMES_DIR = saved_themes
         finally:
             os.environ.pop("STATUSLINE_ACCENT", None)
             if saved_env:

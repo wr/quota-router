@@ -50,7 +50,9 @@ python3 ~/.claude/quota-router/statusline.py --demo
 ## Make it yours
 
 Thresholds, status-line style (`minimal` / `braille` / `circles` / `plain`),
-accent color, and hibernate live in `~/.claude/quota-router/config.json`. The model tier tables
+and hibernate live in `~/.claude/quota-router/config.json`. The accent color
+follows your Claude Code theme per repo (custom themes' `overrides.claude`),
+with env-var and config overrides when you want something else. The model tier tables
 live in the skill and name the models my plans expose — edit them to match
 yours; the gates don't care what the tiers are called. Hibernate is off by
 default because a script that types into your terminal should be something
