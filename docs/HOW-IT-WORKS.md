@@ -168,7 +168,12 @@ the window caps out, the session stops and waits for you. With
 3. At reset + a settle delay, the watchdog resumes the session: it types a
    continue prompt into the original tmux pane if it's still alive (your
    visible session just picks back up), else falls back to
-   `claude --resume <session-id>`.
+   `claude --resume <session-id> -p`. The headless fallback gets a stronger
+   prompt: a `-p` run exits when the turn ends, so the session is told it is
+   one-shot and must not end its turn waiting on background tasks or
+   notifications — nothing can bring it back (a session once stalled exactly
+   that way, ending its resumed turn with "the completion notification will
+   bring me back").
 
 Messages you send while capped are covered too: each one fires a Stop event
 that arms hibernation if nothing had yet, and the resume prompt tells the
