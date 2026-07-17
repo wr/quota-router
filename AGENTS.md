@@ -75,6 +75,9 @@ Data flow (full diagram in docs/HOW-IT-WORKS.md):
   `hibernate_arm_pct` with a future reset — the limit banner never reaches
   hooks), writes a marker, spawns the detached watchdog, which resumes the
   session at reset via the original tmux pane or `claude --resume`.
+  `statusline.py` arms the same marker from its own tick, because a cap
+  crossed while a session sits idle (e.g. a limit-rejected `/loop` wakeup)
+  emits no hook events at all.
 - `skill/SKILL.md` — the routing policy. Classifies the task, gates each
   quota window separately, returns provider/model/effort/fan-out.
 

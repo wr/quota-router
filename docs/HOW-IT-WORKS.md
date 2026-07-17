@@ -32,6 +32,7 @@ flowchart LR
     HOOK -- "injected on every Agent call" --> DECIDE{{"routing decision — SKILL.md"}}
     CC -- "Stop / Notification events" --> HIB[hibernate_hook.py]
     HIB -- "usage-limit stop detected" --> WD[hibernate_watchdog.py]
+    SL -- "hard-capped tick" --> WD
     WD -- "window reset → resume session" --> CC
 ```
 
@@ -136,13 +137,18 @@ Claude Code has no native "wait for the limit to reset and keep going" — when
 the window caps out, the session stops and waits for you. With
 `hibernate_enabled: true`, quota-router babysits instead:
 
-1. A Stop/Notification hook spots the cap. The reliable trigger is the quota
-   cache: Claude Code's limit banner never reaches hooks (verified in the
-   field), but the cache reads 100% at cap — so any Stop/Notification while a
-   window sits at/above `hibernate_arm_pct` (default 99.5) with a future
-   reset arms hibernation. A limit-looking message in the event text also
-   arms, when one ever shows up. Either way the cache must confirm real
-   pressure, so a session merely *talking about* limits can't trigger it.
+1. Two triggers spot the cap, both gated on the quota cache. A
+   Stop/Notification hook arms when an event arrives while a window sits
+   at/above `hibernate_arm_pct` (default 99.5) with a future reset — Claude
+   Code's limit banner never reaches hooks (verified in the field), but the
+   cache reads 100% at cap. A limit-looking message in the event text also
+   arms, when one ever shows up. And the statusline arms on the same
+   condition from its own tick, because a session that caps out while
+   sitting idle produces no hook events at all: a `/loop` scheduled wakeup
+   that gets rejected by the limit dies silently (also verified in the
+   field), while the statusline keeps ticking through it. Either way the
+   cache must confirm real pressure, so a session merely *talking about*
+   limits can't trigger it.
 2. It writes a hibernation marker (session id, tmux pane, reset time — which
    the cache already knows) and spawns a detached watchdog. The statusline
    shows `⏾`.
@@ -175,6 +181,7 @@ session to answer anything you left before continuing its task.
 | `statusline_git_symbols` | auto | `auto` (SF Symbols on macOS, unicode elsewhere), `sf`, or `ascii` |
 | `statusline_accent` | #D97757 | minimal style: fallback hex for the model name. Per repo it auto-follows a custom Claude Code theme (`"theme": "custom:<name>"` in the project's `.claude` settings → `~/.claude/themes/<name>.json` `overrides.claude`); an explicit `statusline_accent` key in project settings or a `STATUSLINE_ACCENT` env var overrides the theme |
 | `hibernate_enabled` | false | Opt-in auto-resume after a usage-limit stop |
+| `hibernate_arm_pct` | 99.5 | A window at/above this with a future reset counts as hard-capped |
 | `hibernate_settle_seconds` | 90 | Extra wait past the reset before resuming |
 | `hibernate_max_wait_hours` | 12 | Never hibernate longer than this |
 | `fable_available_on_plan` | false | Set true only if a promo/frontier model actually shows in your model selector; gates the top Claude tier |
@@ -199,6 +206,11 @@ session to answer anything you left before continuing its task.
   Claude Code emits at a cap isn't documented, so the hook logs everything it
   sees to `events.log` — if your first real cap slips past the detection, the
   log is exactly what's needed to fix it.
+- **Statusline arming resumes the session whose tick saw the cap.** The cap
+  is account-wide but the marker is single-shot: with several sessions open,
+  whichever statusline ticks first past the threshold is the one the
+  watchdog resumes. And if the only capped session's statusline stops
+  ticking while it's idle, nothing arms until some session ticks.
 - **Both payload formats are undocumented** and could change in any release.
   The scripts fail toward "unknown", never toward a crash in your status
   line, but a format change will blank the readout until updated.
