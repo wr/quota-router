@@ -90,6 +90,10 @@ Data flow (full diagram in docs/HOW-IT-WORKS.md):
   route on this", never "free headroom".
 - **Never collapse the 5-hour and 7-day windows** into one number (e.g. with
   `max()`); they get separate gates and different policies.
+- **A tick may only describe the current window.** Idle instances repaint
+  with rate_limits from their last API response, so the cache drops incoming
+  windows whose reset is already past and used% regressions within one
+  window (`observed_at` is stamped by the reader — it proves nothing).
 - **Both input formats are undocumented** (Claude's status payload, Codex's
   rollout logs) — parse defensively, tolerate missing keys, and keep
   `hibernate_hook.py`'s log-everything behavior so format changes are

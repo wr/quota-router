@@ -59,9 +59,27 @@ def _extract_claude_windows(payload, now):
     return out
 
 
+def _stale_payload(incoming, stored, now):
+    """Detect a stale repaint: an idle instance keeps pushing the rate_limits
+    from its last API response, and observed_at is stamped by us — so
+    staleness has to come from window identity. A window whose reset is
+    already past has rolled over (never guess past a reset), and used%
+    can't regress within one window (a real decrease changes resets_at)."""
+    ra = incoming.get("resets_at")
+    if isinstance(ra, (int, float)) and ra < now - 120:
+        return True
+    if isinstance(stored, dict) and isinstance(ra, (int, float)) \
+            and stored.get("resets_at") == ra \
+            and isinstance(stored.get("used_percentage"), (int, float)) \
+            and incoming["used_percentage"] < stored["used_percentage"]:
+        return True
+    return False
+
+
 def _update_cache(new_windows, now, cache_dir, meta=None):
     """Read-modify-write the cache under an flock. Carry forward windows absent
-    from this tick; never replace a stored window with an older observation."""
+    from this tick; never replace a stored window with an older observation,
+    and drop incoming windows that are provably stale (see _stale_payload)."""
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
     lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -78,6 +96,8 @@ def _update_cache(new_windows, now, cache_dir, meta=None):
         for key in ("five_hour", "seven_day"):
             incoming = new_windows.get(key)
             stored = cache.get(key) if isinstance(cache.get(key), dict) else None
+            if incoming and _stale_payload(incoming, stored, now):
+                incoming = None
             if incoming and stored:
                 # reject an older observation than what's already stored
                 if incoming["observed_at"] >= stored.get("observed_at", 0):
@@ -772,6 +792,60 @@ def _self_test():
             {"rate_limits": {"seven_day": {"used_percentage": 5, "resets_at": now}}}, now - 100)
         c = _update_cache(old, now - 100, d)
         check("reject_older_observation", c["seven_day"]["used_percentage"] == 72)
+
+        # ---- stale-payload clobber guards (W-540) ----
+        # An idle instance repaints with rate_limits from its last API
+        # response; observed_at is stamped by us, so staleness must be
+        # detected from window identity instead.
+        with tempfile.TemporaryDirectory() as d2:
+            CACHE = os.path.join(d2, "quota-cache.json")
+            LOCK = os.path.join(d2, "quota-cache.lock")
+
+            # seed a live view of the current windows
+            seed = {"rate_limits": {
+                "five_hour": {"used_percentage": 18, "resets_at": now + 900},
+                "seven_day": {"used_percentage": 40, "resets_at": now + 500000}}}
+            _update_cache(_extract_claude_windows(seed, now), now, d2)
+
+            # 1. incoming five_hour describes an already-rolled-over window
+            # (resets_at in the past) -> dropped, stored value survives
+            stale = {"rate_limits": {
+                "five_hour": {"used_percentage": 76, "resets_at": now - 1700},
+                "seven_day": {"used_percentage": 40, "resets_at": now + 500000}}}
+            c = _update_cache(_extract_claude_windows(stale, now + 16), now + 16, d2)
+            check("reject_past_reset_payload",
+                  c["five_hour"]["used_percentage"] == 18
+                  and c["five_hour"]["resets_at"] == now + 900)
+
+            # 2. same window (same resets_at), used% regresses -> dropped
+            regress = {"rate_limits": {
+                "seven_day": {"used_percentage": 36, "resets_at": now + 500000}}}
+            c = _update_cache(_extract_claude_windows(regress, now + 20), now + 20, d2)
+            check("reject_regression_same_window",
+                  c["seven_day"]["used_percentage"] == 40)
+
+            # 3. increase within the same window -> accepted
+            up = {"rate_limits": {
+                "five_hour": {"used_percentage": 26, "resets_at": now + 900}}}
+            c = _update_cache(_extract_claude_windows(up, now + 30), now + 30, d2)
+            check("accept_increase_same_window",
+                  c["five_hour"]["used_percentage"] == 26)
+
+            # 4. rollover: new resets_at makes a lower used% legitimate
+            roll = {"rate_limits": {
+                "five_hour": {"used_percentage": 1, "resets_at": now + 18900}}}
+            c = _update_cache(_extract_claude_windows(roll, now + 40), now + 40, d2)
+            check("accept_rollover_decrease",
+                  c["five_hour"]["used_percentage"] == 1
+                  and c["five_hour"]["resets_at"] == now + 18900)
+
+            # 5. a past-reset window on an empty cache is not stored at all
+            CACHE = os.path.join(d2, "empty-cache.json")
+            c = _update_cache(_extract_claude_windows(stale, now + 16), now + 16, d2)
+            check("past_reset_not_stored_when_empty", "five_hour" not in c
+                  and c["seven_day"]["used_percentage"] == 40)
+        CACHE = os.path.join(d, "quota-cache.json")
+        LOCK = os.path.join(d, "quota-cache.lock")
 
         # invalid input JSON doesn't crash extraction
         check("invalid_json_safe", _extract_claude_windows(_load_json_from_str("{bad"), now) == {})
