@@ -493,15 +493,15 @@ def _agents_entries(cache, now, session_effort, session_id=None, cwd=None):
 
 def _agents_segment(cache, now, session_effort, color_on=False,
                     session_id=None, cwd=None):
-    """`􀃋 sonnet high  􀃍 sol xhigh` — gray numbered badge per running
-    subagent, model + effort painted in the effort's color."""
+    """`􀃋 sonnet high  􀃍 sol xhigh` — numbered badge per running subagent,
+    badge + model + effort all painted in the agent's effort color (one
+    paint over the whole chunk, so a max agent's rainbow spans its badge)."""
     entries = _agents_entries(cache, now, session_effort, session_id, cwd)
     parts = []
     for i, (model, effort) in enumerate(entries[:9], 1):
         label = str(effort or "").lower()
         text = f"{model} {label}" if label in EFFORT_LABELS else model
-        badge = f"{GRAY}{_badge(i)}{RESET}" if color_on else _badge(i)
-        parts.append(badge + " " + _effort_paint(text, label, now, color_on))
+        parts.append(_effort_paint(_badge(i) + " " + text, label, now, color_on))
     if len(entries) > 9:
         parts.append(f"+{len(entries) - 9}")
     return "  ".join(parts)
@@ -1355,12 +1355,12 @@ def _self_test():
             _load_json_from_probe = saved
         check("agents_in_render", "􀃋" in la and "sonnet" in la and "sol" in la)
 
-        # effort color palette on agents; gray badges
+        # effort color palette on agents; the badge wears its agent's color
         seg_c = _agents_segment(cache_meta, now, "high", True)
         check("agents_effort_colors",
-              EFFORT_COLORS["high"] + "sonnet high" in seg_c
-              and EFFORT_COLORS["xhigh"] + "sol xhigh" in seg_c
-              and GRAY + "􀃋" in seg_c)
+              EFFORT_COLORS["high"] + "􀃋 sonnet high" in seg_c
+              and EFFORT_COLORS["xhigh"] + "􀃏 sol xhigh" in seg_c
+              and GRAY + "􀃋" not in seg_c)
 
         # rainbow max: truecolor per char, shimmers with time, off when uncolored
         r1 = _effort_paint("fable-5 max", "max", 100, True)
