@@ -100,6 +100,18 @@ The always-on gauge styles (`statusline_style: braille`, `circles`, or
 Claude 5h ⣿88%!(34m) / 7d ⣧71% · Codex wk ⡄19%
 ```
 
+Every style also shows the session's context usage — `238.9k (24%)`, taken
+straight from the payload's `context_window` block — docked to the right
+edge of the row (Claude Code exports `COLUMNS` to statusline scripts since
+v2.1.153; without it the readout is appended as one more segment). `COLUMNS`
+is the raw terminal width and the row renders inside Claude Code's UI
+chrome, so the dock stops `statusline_context_margin` columns short of it
+(default 4) — if the readout still gets ellipsis-truncated on your setup,
+raise the margin; if it floats left of the edge, lower it. Gray normally,
+yellow from 80%, red from 95% — display only, nothing routes on it. On
+ticks where Claude Code reports no usage (session start, right after
+`/compact`) the readout is omitted rather than shown as zero.
+
 Run `statusline.py --demo` to see the styles rendered in your own terminal.
 
 ## The routing policy, in short
@@ -179,6 +191,7 @@ session to answer anything you left before continuing its task.
 | `statusline_color` | true | ANSI colors on the readout |
 | `statusline_show_pct` | 75 | minimal style: hide quota below this, show both providers at it |
 | `statusline_git_symbols` | auto | `auto` (SF Symbols on macOS, unicode elsewhere), `sf`, or `ascii` |
+| `statusline_context_margin` | 4 | columns held back from `COLUMNS` when docking the context readout; raise if it truncates, lower if it floats left of the edge |
 | `statusline_accent` | #D97757 | minimal style: fallback hex for the model name. Per repo it auto-follows a custom Claude Code theme (`"theme": "custom:<name>"` in the project's `.claude` settings → `~/.claude/themes/<name>.json` `overrides.claude`); an explicit `statusline_accent` key in project settings or a `STATUSLINE_ACCENT` env var overrides the theme |
 | `hibernate_enabled` | false | Opt-in auto-resume after a usage-limit stop |
 | `hibernate_arm_pct` | 99.5 | A window at/above this with a future reset counts as hard-capped |
