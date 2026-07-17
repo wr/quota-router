@@ -406,7 +406,12 @@ def _badge(n):
 
 def _codex_active(now):
     """Rollout files written in the last couple of minutes = live Codex runs.
-    Model and effort come from the newest turn_context in the file tail."""
+    Model, effort, and cwd come from the head lines: session_meta carries cwd
+    and (2026-07 format) a thread_settings_applied event carries model +
+    reasoning_effort. The session_meta line embeds the full base instructions,
+    so this parses whole lines instead of a fixed-size head read. Older
+    rollouts repeat a turn_context per turn instead — for those the newest
+    match in the tail still wins."""
     out = []
     try:
         days = sorted(glob.glob(os.path.join(CODEX_SESSIONS, "*", "*", "*")))[-2:]
@@ -415,17 +420,37 @@ def _codex_active(now):
                 try:
                     if now - os.path.getmtime(p) > CODEX_ACTIVE_SECONDS:
                         continue
+                    model = effort = cwd = None
                     with open(p, "rb") as f:
-                        head = f.read(4096).decode("utf-8", "replace")
+                        for _ in range(12):
+                            ln = f.readline(1_048_576)
+                            if not ln:
+                                break
+                            try:
+                                d = json.loads(ln.decode("utf-8", "replace"))
+                            except Exception:
+                                continue
+                            pl = d.get("payload")
+                            if not isinstance(pl, dict):
+                                continue
+                            if d.get("type") == "session_meta":
+                                cwd = pl.get("cwd") or cwd
+                            ts = pl.get("thread_settings")
+                            if isinstance(ts, dict):
+                                model = ts.get("model") or model
+                                effort = ts.get("reasoning_effort") or effort
+                            if model and cwd:
+                                break
                         f.seek(0, 2)
                         f.seek(max(0, f.tell() - 65536))
                         tail = f.read().decode("utf-8", "replace")
+                    # legacy per-turn format: no thread_settings in the head,
+                    # so the newest turn_context in the tail decides
                     models = re.findall(r'"model":"([^"]+)"', tail)
                     efforts = re.findall(r'"effort":"([^"]+)"', tail)
-                    cwd = re.search(r'"cwd":"([^"]+)"', head)
-                    out.append({"model": models[-1] if models else "codex",
-                                "effort": efforts[-1] if efforts else None,
-                                "cwd": cwd.group(1) if cwd else None})
+                    out.append({"model": model or (models[-1] if models else "codex"),
+                                "effort": effort or (efforts[-1] if efforts else None),
+                                "cwd": cwd})
                 except OSError:
                     continue
     except Exception:
@@ -1241,6 +1266,30 @@ def _self_test():
             runs = saved_cact(time.time())
             check("codex_active_parses_cwd",
                   bool(runs) and runs[0].get("cwd") == "/repo/a"
+                  and runs[0]["model"] == "gpt-5.6-sol"
+                  and runs[0]["effort"] == "xhigh")
+
+            # 2026-07 format: model + reasoning_effort live in a
+            # thread_settings_applied event after a session_meta line too
+            # big for a fixed 4KB head read, and a long-running task has
+            # neither anywhere near the tail
+            os.unlink(os.path.join(day, "rollout-x.jsonl"))
+            with open(os.path.join(day, "rollout-y.jsonl"), "w") as f:
+                meta = {"type": "session_meta",
+                        "payload": {"cwd": "/repo/b",
+                                    "base_instructions": "x" * 8192}}
+                f.write(json.dumps(meta) + "\n")
+                f.write(json.dumps({"type": "event_msg", "payload": {
+                    "type": "thread_settings_applied",
+                    "thread_settings": {"model": "gpt-5.6-sol",
+                                        "reasoning_effort": "xhigh"}}}) + "\n")
+                for i in range(400):
+                    f.write(json.dumps({"type": "response_item",
+                                        "payload": {"seq": i,
+                                                    "text": "y" * 300}}) + "\n")
+            runs = saved_cact(time.time())
+            check("codex_active_thread_settings_format",
+                  bool(runs) and runs[0].get("cwd") == "/repo/b"
                   and runs[0]["model"] == "gpt-5.6-sol"
                   and runs[0]["effort"] == "xhigh")
         finally:
