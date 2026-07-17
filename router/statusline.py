@@ -783,12 +783,16 @@ def _context_segment(payload, color_on=False):
     return code + txt + RESET
 
 
-def _dock_right(line, seg):
-    """Pad `line` with spaces so `seg` lands flush at the right edge. Claude
-    Code exports COLUMNS to the statusline (v2.1.153+); when it's missing or
-    the row is too tight, degrade to appending seg as one more segment."""
+def _dock_right(line, seg, margin=4):
+    """Pad `line` with spaces so `seg` lands at the right edge. Claude Code
+    exports COLUMNS to the statusline (v2.1.153+), but it's the raw terminal
+    width (process.stdout.columns) and the row renders inside UI chrome —
+    overshoot and Claude Code truncates the row with an ellipsis — so stop
+    `margin` columns short (statusline_context_margin, default 4; short is
+    invisible, long merely floats the readout left). Missing COLUMNS or a
+    too-tight row degrades to appending seg as one more segment."""
     try:
-        cols = int(os.environ["COLUMNS"])
+        cols = int(os.environ["COLUMNS"]) - margin
     except (KeyError, ValueError, TypeError):
         cols = 0
     pad = cols - _visible_width(line) - _visible_width(seg)
@@ -825,7 +829,10 @@ def main():
                                    config.get("statusline_style") == "minimal"))
         ctx = _context_segment(payload, color_on)
         if ctx:
-            line = _dock_right(line, ctx)
+            margin = config.get("statusline_context_margin", 4)
+            if not isinstance(margin, (int, float)) or margin < 0:
+                margin = 4
+            line = _dock_right(line, ctx, int(margin))
     except Exception:
         pass  # cosmetic extra: never let it break the line
     sys.stdout.write(line)
@@ -1125,11 +1132,18 @@ def _self_test():
 
         saved_cols = os.environ.pop("COLUMNS", None)
         try:
+            # COLUMNS is the full terminal width (process.stdout.columns);
+            # the statusline row sits inside UI chrome, so the dock stops a
+            # margin short of it (default 4) or Claude Code truncates the row
             os.environ["COLUMNS"] = "40"
             docked = _dock_right("left", "9.1k (5%)")
-            check("dock_pads_to_columns", _visible_width(docked) == 40
+            check("dock_pads_to_columns_minus_margin",
+                  _visible_width(docked) == 36
                   and docked.startswith("left") and docked.endswith("9.1k (5%)"))
-            os.environ["COLUMNS"] = "12"
+            check("dock_margin_override",
+                  _visible_width(_dock_right("left", "9.1k (5%)", margin=0)) == 40
+                  and _visible_width(_dock_right("left", "9.1k (5%)", margin=10)) == 30)
+            os.environ["COLUMNS"] = "16"
             check("dock_narrow_falls_back",
                   _dock_right("a-long-left-part", "9.1k (5%)")
                   == "a-long-left-part · 9.1k (5%)")
@@ -1148,13 +1162,17 @@ def _self_test():
             "current_usage": {"input_tokens": 70000,
                               "cache_read_input_tokens": 6400,
                               "cache_creation_input_tokens": 0}})
+        with open(os.path.join(fake_home, ".claude", "quota-router",
+                               "config.json"), "w") as f:
+            json.dump({"hibernate_enabled": True, "hibernate_arm_pct": 99.5,
+                       "statusline_context_margin": 6}, f)
         r2 = subprocess.run([sys.executable, os.path.abspath(__file__)],
                             input=json.dumps(tick_ctx),
                             env=dict(env, COLUMNS="100"),
                             capture_output=True, text=True, timeout=30)
-        check("tick_e2e_context_docked",
+        check("tick_e2e_context_docked_with_margin",
               r2.returncode == 0 and "76.4k (38%)" in r2.stdout
-              and _visible_width(r2.stdout) == 100)
+              and _visible_width(r2.stdout) == 94)
         r3 = subprocess.run([sys.executable, os.path.abspath(__file__)],
                             input=json.dumps(tick),
                             env=dict(env, COLUMNS="100"),
@@ -1482,7 +1500,8 @@ def _demo():
             pl = {"context_window": {"total_input_tokens": tok,
                                      "used_percentage": pct,
                                      "current_usage": {"input_tokens": tok}}}
-            print(_dock_right(line, _context_segment(pl, True)))
+            # margin 0: the demo prints straight to the terminal, no chrome
+            print(_dock_right(line, _context_segment(pl, True), margin=0))
     finally:
         _load_json_from_probe = saved
     return 0
