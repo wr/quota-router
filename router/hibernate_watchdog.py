@@ -30,6 +30,18 @@ RESUME_PROMPT = ("The usage-limit window has reset. First check for and respond 
                  "to any messages I sent while you were capped, then continue "
                  "the task you were working on when the limit interrupted you.")
 
+# The -p fallback exits the moment the resumed turn ends — no background-task
+# completion, notification, or scheduled wakeup can ever re-invoke it, and the
+# single-shot marker is already archived. A session that ends its turn
+# "waiting to be brought back" therefore stalls silently (seen in the field).
+HEADLESS_RESUME_PROMPT = RESUME_PROMPT + (
+    " Important: you are resumed as a one-shot headless run — this process "
+    "exits when your turn ends and nothing can re-invoke you afterward. Do "
+    "not end your turn waiting on background tasks, notifications, or "
+    "wakeups; wait on them synchronously and drive the work to completion "
+    "in this turn. If something genuinely cannot finish here, commit what "
+    "you have and leave a handoff note before ending the turn.")
+
 
 def _load(path, default):
     try:
@@ -90,7 +102,7 @@ def _resume(marker, dry):
             print(f"DRY: claude --resume {sid} -p <resume prompt> (cwd={cwd})")
             return "dry_headless"
         with open(LOG, "a") as logf:
-            subprocess.Popen(["claude", "--resume", sid, "-p", RESUME_PROMPT],
+            subprocess.Popen(["claude", "--resume", sid, "-p", HEADLESS_RESUME_PROMPT],
                              cwd=cwd if cwd and os.path.isdir(cwd) else None,
                              stdout=logf, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL, start_new_session=True)
@@ -210,7 +222,25 @@ def _self_test():
         check("stale_abandoned", r == "abandoned_stale"
               and not os.path.exists(MARKER) and os.path.exists(ARCHIVE))
 
-        # 6. disarm flow
+        # 6. headless resume passes the one-shot prompt, not the tmux one
+        write_marker({"armed_at": now, "resets_at": now - 600,
+                      "window": "five_hour", "session_id": "abc123", "cwd": d})
+        launched = []
+        saved_popen = subprocess.Popen
+        saved_which = shutil.which
+        subprocess.Popen = lambda argv, **kw: launched.append(argv)
+        shutil.which = lambda name: "/usr/bin/true" if name == "claude" else None
+        try:
+            r = run_once(dry=False)
+        finally:
+            subprocess.Popen = saved_popen
+            shutil.which = saved_which
+        check("headless_oneshot_prompt", r == "headless" and len(launched) == 1
+              and launched[0][-1] == HEADLESS_RESUME_PROMPT
+              and launched[0][-1] != RESUME_PROMPT
+              and "one-shot" in launched[0][-1])
+
+        # 7. disarm flow
         write_marker({"armed_at": now, "resets_at": now + 3600})
         m = _load(MARKER, None)
         _archive(m, "disarmed_manually")
