@@ -69,7 +69,7 @@ The default style is `minimal` — quota is invisible until it matters:
 - Model + effort (the session's, and each running subagent's) are color-coded
   by effort: low yellow, medium green, high light purple, xhigh purple, and
   max renders as a rainbow gradient that shimmers as the statusline repaints.
-  Separators, badges, and the codex label are gray.
+  Separators and the codex label are gray.
 - Below `statusline_show_pct` (default 75) on both providers: no numbers at
   all. The moment either crosses it, both providers' most-pressured windows
   appear — your usage and the alternative, in one glance.
@@ -79,8 +79,9 @@ The default style is `minimal` — quota is invisible until it matters:
   (within 8 hours) — a weekly window days from reset shows just the number.
 - `~` means the number is stale; `--` means unknown.
 - A leading `⏾` means a capped session is hibernating.
-- Running subagents appear last, as gray numbered badges with effort-colored
-  model + effort: `􀃋 sonnet high  􀃍 sol xhigh`. Claude launches are tracked by the Agent-tool
+- Running subagents appear last, as numbered badges with model + effort,
+  the whole chunk painted in the agent's effort color (a max agent's
+  rainbow spans its badge too): `􀃋 sonnet high  􀃍 sol xhigh`. Claude launches are tracked by the Agent-tool
   hooks (PreToolUse registers, PostToolUse/SubagentStop/SessionEnd clean up,
   a 2-hour TTL scrubs crash leftovers); Codex runs are detected from rollout
   files written in the last two minutes, with model and effort read from the
