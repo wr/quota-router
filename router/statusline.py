@@ -32,6 +32,7 @@ LOCK = os.path.join(HOME, ".claude", "quota-cache.lock")
 CONFIG = os.path.join(ROUTER_DIR, "config.json")
 PROBE = os.path.join(ROUTER_DIR, "codex_quota_probe.py")
 HIBERNATE_MARKER = os.path.join(ROUTER_DIR, "hibernate.json")
+WATCHDOG = os.path.join(ROUTER_DIR, "hibernate_watchdog.py")
 
 
 def _load_json(path, default):
@@ -609,6 +610,63 @@ def _render(cache, config, now, payload=None):
     return f"{prefix}Claude 5h {five} / 7d {seven} · {codex}"
 
 
+def _maybe_arm_hibernate(cache, config, now, payload):
+    """A limit-rejected turn (e.g. a /loop scheduled wakeup firing after the
+    cap was crossed while the session sat idle) emits no hook events at all,
+    so hibernate_hook.py never runs for it. The statusline keeps ticking
+    regardless, so arm from here: any window at/above hibernate_arm_pct with
+    a future reset writes the marker and spawns the watchdog. Same guards as
+    the hook (opt-in, live-marker dedup, max-wait bound); a failure must
+    never break the tick."""
+    try:
+        if not (isinstance(config, dict) and config.get("hibernate_enabled")):
+            return
+        max_wait = config.get("hibernate_max_wait_hours", 12) * 3600
+        if os.path.exists(HIBERNATE_MARKER):
+            old = _load_json(HIBERNATE_MARKER, {})
+            if now - old.get("armed_at", 0) <= max_wait:
+                return  # live marker (watchdog running) wins
+        arm = config.get("hibernate_arm_pct", 99.5)
+        window = resets_at = None
+        for key in ("five_hour", "seven_day"):
+            w = cache.get(key) if isinstance(cache, dict) else None
+            if not isinstance(w, dict):
+                continue
+            used, ra = w.get("used_percentage"), w.get("resets_at")
+            if isinstance(used, (int, float)) and used >= arm \
+                    and isinstance(ra, (int, float)) and 0 < ra - now <= max_wait:
+                window, resets_at = key, ra
+                break
+        if window is None:
+            return
+        if not isinstance(payload, dict):
+            payload = {}
+        ws = payload.get("workspace")
+        cwd = (ws.get("current_dir") if isinstance(ws, dict) else None) \
+            or payload.get("cwd")
+        marker = {
+            "armed_at": now,
+            "window": window,
+            "resets_at": resets_at,
+            "session_id": payload.get("session_id"),
+            "cwd": cwd,
+            "transcript_path": payload.get("transcript_path"),
+            "tmux_pane": os.environ.get("TMUX_PANE"),
+            "trigger_event": "statusline_tick",
+        }
+        tmp = HIBERNATE_MARKER + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(marker, f, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, HIBERNATE_MARKER)
+        if not os.environ.get("QUOTA_HIBERNATE_NO_SPAWN"):
+            subprocess.Popen([sys.executable, WATCHDOG, "--once"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
 def _load_json_from_probe():
     try:
         out = subprocess.run(
@@ -657,6 +715,7 @@ def main():
         cache = _update_cache(windows, now, cache_dir, meta)
     except Exception:
         cache = _load_json(CACHE, {})  # degrade: still render from last cache
+    _maybe_arm_hibernate(cache, config, now, payload)
     readout = _render(cache, config, now, payload)
     prev_line = _maybe_wrap_previous(config, raw)
     sys.stdout.write((prev_line + "  " if prev_line else "") + readout)
@@ -776,6 +835,99 @@ def _self_test():
             _load_json_from_probe = saved
             HIBERNATE_MARKER = saved_marker
         check("hibernate_prefix", line4.startswith("⏾ "))
+
+        # ---- hibernate arming from a tick (W-539) ----
+        # A limit-rejected scheduled wakeup emits no hook events, so the
+        # statusline must arm hibernation itself on a hard-capped window.
+        HIBERNATE_MARKER = os.path.join(d, "hib", "hibernate.json")
+        os.makedirs(os.path.join(d, "hib"))
+        os.environ["QUOTA_HIBERNATE_NO_SPAWN"] = "1"
+        cfg_h = {"hibernate_enabled": True, "hibernate_arm_pct": 99.5,
+                 "hibernate_max_wait_hours": 12}
+        capped = {"five_hour": {"used_percentage": 100.0, "observed_at": now,
+                                "present_in_latest_payload": True,
+                                "resets_at": now + 900},
+                  "seven_day": {"used_percentage": 40, "observed_at": now,
+                                "present_in_latest_payload": True,
+                                "resets_at": now + 500000}}
+        pay_h = {"session_id": "sess-1", "transcript_path": "/t/x.jsonl",
+                 "workspace": {"current_dir": "/repo"}}
+        try:
+            _maybe_arm_hibernate(capped, cfg_h, now, pay_h)
+            m = _load_json(HIBERNATE_MARKER, {})
+            check("tick_arms_on_hard_cap",
+                  m.get("window") == "five_hour" and m.get("resets_at") == now + 900
+                  and m.get("session_id") == "sess-1" and m.get("cwd") == "/repo"
+                  and m.get("transcript_path") == "/t/x.jsonl"
+                  and m.get("trigger_event") == "statusline_tick")
+
+            # a live marker is not clobbered by the next tick
+            _maybe_arm_hibernate(capped, cfg_h, now + 60,
+                                 dict(pay_h, session_id="sess-2"))
+            check("tick_keeps_live_marker",
+                  _load_json(HIBERNATE_MARKER, {}).get("session_id") == "sess-1")
+
+            # a stale marker (dead watchdog) is replaced
+            with open(HIBERNATE_MARKER, "w") as f:
+                json.dump({"armed_at": now - 24 * 3600, "session_id": "old"}, f)
+            _maybe_arm_hibernate(capped, cfg_h, now, pay_h)
+            check("tick_replaces_stale_marker",
+                  _load_json(HIBERNATE_MARKER, {}).get("session_id") == "sess-1")
+            os.unlink(HIBERNATE_MARKER)
+
+            # below arm threshold -> not armed
+            near = dict(capped, five_hour=dict(capped["five_hour"],
+                                               used_percentage=97.0))
+            _maybe_arm_hibernate(near, cfg_h, now, pay_h)
+            check("tick_not_armed_below_pct", not os.path.exists(HIBERNATE_MARKER))
+
+            # capped but reset already passed -> nothing to wait for
+            rolled = dict(capped, five_hour=dict(capped["five_hour"],
+                                                 resets_at=now - 60))
+            rolled["seven_day"] = dict(capped["seven_day"], resets_at=now - 60)
+            _maybe_arm_hibernate(rolled, cfg_h, now, pay_h)
+            check("tick_not_armed_after_rollover",
+                  not os.path.exists(HIBERNATE_MARKER))
+
+            # hibernate disabled -> never armed
+            _maybe_arm_hibernate(capped, {"hibernate_enabled": False}, now, pay_h)
+            check("tick_not_armed_when_disabled",
+                  not os.path.exists(HIBERNATE_MARKER))
+
+            # garbage input must not raise (statusline must never crash)
+            try:
+                _maybe_arm_hibernate(None, cfg_h, now, "not-a-dict")
+                _maybe_arm_hibernate({"five_hour": "junk"}, None, now, {})
+                check("tick_arm_never_raises", True)
+            except Exception:
+                check("tick_arm_never_raises", False)
+        finally:
+            os.environ.pop("QUOTA_HIBERNATE_NO_SPAWN", None)
+            HIBERNATE_MARKER = saved_marker
+
+        # end to end: a real tick against a fake HOME writes the marker
+        fake_home = os.path.join(d, "fakehome")
+        os.makedirs(os.path.join(fake_home, ".claude", "quota-router"))
+        with open(os.path.join(fake_home, ".claude", "quota-router",
+                               "config.json"), "w") as f:
+            json.dump({"hibernate_enabled": True, "hibernate_arm_pct": 99.5}, f)
+        rnow = time.time()
+        tick = {"session_id": "e2e-sess", "transcript_path": "/t/e2e.jsonl",
+                "workspace": {"current_dir": fake_home},
+                "model": {"display_name": "Fable 5"},
+                "rate_limits": {"five_hour": {"used_percentage": 100.0,
+                                              "resets_at": rnow + 600}}}
+        env = dict(os.environ, HOME=fake_home, QUOTA_HIBERNATE_NO_SPAWN="1",
+                   QUOTA_PR_NO_REFRESH="1")
+        r = subprocess.run([sys.executable, os.path.abspath(__file__)],
+                           input=json.dumps(tick), env=env,
+                           capture_output=True, text=True, timeout=30)
+        e2e_marker = _load_json(os.path.join(
+            fake_home, ".claude", "quota-router", "hibernate.json"), {})
+        check("tick_e2e_marker_written",
+              r.returncode == 0 and r.stdout.strip() != ""
+              and e2e_marker.get("session_id") == "e2e-sess"
+              and e2e_marker.get("window") == "five_hour")
 
         # ---- minimal style ----
         global _effort, AGENTS, _codex_active, CODEX_SESSIONS
