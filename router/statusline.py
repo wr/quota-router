@@ -743,6 +743,60 @@ def _maybe_wrap_previous(config, raw_stdin):
         return None
 
 
+# ---------------------------------------------------------------------------
+# context readout, docked to the right edge
+# ---------------------------------------------------------------------------
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m|\033\][^\033\007]*(?:\007|\033\\)")
+
+
+def _visible_width(s):
+    """Terminal cells a string occupies: ANSI SGR + OSC sequences are
+    invisible, East-Asian wide/fullwidth glyphs take two cells."""
+    import unicodedata
+    w = 0
+    for ch in _ANSI_RE.sub("", s):
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def _context_segment(payload, color_on=False):
+    """`238.9k (24%)` from the payload's context_window block (present since
+    Claude Code ~2.1.132 with current-context semantics). None when absent or
+    when current_usage is null (fresh session, right after /compact) —
+    unknown is omitted, never rendered as 0%."""
+    if not isinstance(payload, dict):
+        return None
+    cw = payload.get("context_window")
+    if not isinstance(cw, dict) or not isinstance(cw.get("current_usage"), dict):
+        return None
+    total = cw.get("total_input_tokens")
+    pct = cw.get("used_percentage")
+    if not isinstance(total, (int, float)) or not isinstance(pct, (int, float)):
+        return None
+    if total < 0 or pct < 0:
+        return None
+    num = f"{total / 1e6:.2f}M" if total >= 1e6 else f"{total / 1e3:.1f}k"
+    txt = f"{num} ({int(round(pct))}%)"
+    if not color_on:
+        return txt
+    code = RED if pct >= 95 else (YELLOW if pct >= 80 else GRAY)
+    return code + txt + RESET
+
+
+def _dock_right(line, seg):
+    """Pad `line` with spaces so `seg` lands flush at the right edge. Claude
+    Code exports COLUMNS to the statusline (v2.1.153+); when it's missing or
+    the row is too tight, degrade to appending seg as one more segment."""
+    try:
+        cols = int(os.environ["COLUMNS"])
+    except (KeyError, ValueError, TypeError):
+        cols = 0
+    pad = cols - _visible_width(line) - _visible_width(seg)
+    if pad >= 2:
+        return line + " " * pad + seg
+    return line + " · " + seg
+
+
 def main():
     now = time.time()
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -763,7 +817,18 @@ def main():
     _maybe_arm_hibernate(cache, config, now, payload)
     readout = _render(cache, config, now, payload)
     prev_line = _maybe_wrap_previous(config, raw)
-    sys.stdout.write((prev_line + "  " if prev_line else "") + readout)
+    line = (prev_line + "  " if prev_line else "") + readout
+    try:
+        # same color default as the active renderer: minimal is colored
+        # unless turned off, the classic styles are plain unless turned on
+        color_on = bool(config.get("statusline_color",
+                                   config.get("statusline_style") == "minimal"))
+        ctx = _context_segment(payload, color_on)
+        if ctx:
+            line = _dock_right(line, ctx)
+    except Exception:
+        pass  # cosmetic extra: never let it break the line
+    sys.stdout.write(line)
     return 0
 
 
@@ -1027,6 +1092,76 @@ def _self_test():
               r.returncode == 0 and r.stdout.strip() != ""
               and e2e_marker.get("session_id") == "e2e-sess"
               and e2e_marker.get("window") == "five_hour")
+
+        # ---- context readout (right-docked) ----
+        cwp = {"context_window": {
+            "total_input_tokens": 238900, "total_output_tokens": 1200,
+            "context_window_size": 1000000, "used_percentage": 24,
+            "current_usage": {"input_tokens": 200000,
+                              "cache_read_input_tokens": 30000,
+                              "cache_creation_input_tokens": 8900}}}
+        check("ctx_format", _context_segment(cwp) == "238.9k (24%)")
+        check("ctx_million", _context_segment({"context_window": dict(
+            cwp["context_window"], total_input_tokens=1004000)}) == "1.00M (24%)")
+        # unknown is omitted, never 0%: absent block, null current_usage
+        # (fresh session / right after /compact), or junk values
+        check("ctx_absent", _context_segment({}) is None
+              and _context_segment(None) is None)
+        check("ctx_null_after_compact", _context_segment({"context_window": dict(
+            cwp["context_window"], current_usage=None)}) is None)
+        check("ctx_junk_pct", _context_segment({"context_window": dict(
+            cwp["context_window"], used_percentage="24")}) is None)
+        check("ctx_gray", _context_segment(cwp, True)
+              == GRAY + "238.9k (24%)" + RESET)
+        check("ctx_yellow", _context_segment({"context_window": dict(
+            cwp["context_window"], used_percentage=83)}, True).startswith(YELLOW))
+        check("ctx_red", _context_segment({"context_window": dict(
+            cwp["context_window"], used_percentage=96)}, True).startswith(RED))
+
+        check("visible_width_strips_ansi",
+              _visible_width(GRAY + "abc" + RESET + YELLOW + "de" + RESET) == 5)
+        check("visible_width_strips_osc8",
+              _visible_width("\033]8;;https://x\033\\#4\033]8;;\033\\") == 2)
+
+        saved_cols = os.environ.pop("COLUMNS", None)
+        try:
+            os.environ["COLUMNS"] = "40"
+            docked = _dock_right("left", "9.1k (5%)")
+            check("dock_pads_to_columns", _visible_width(docked) == 40
+                  and docked.startswith("left") and docked.endswith("9.1k (5%)"))
+            os.environ["COLUMNS"] = "12"
+            check("dock_narrow_falls_back",
+                  _dock_right("a-long-left-part", "9.1k (5%)")
+                  == "a-long-left-part · 9.1k (5%)")
+            os.environ.pop("COLUMNS", None)
+            check("dock_no_columns_falls_back",
+                  _dock_right("left", "9.1k (5%)") == "left · 9.1k (5%)")
+        finally:
+            if saved_cols is not None:
+                os.environ["COLUMNS"] = saved_cols
+
+        # end to end: a tick carrying context_window + COLUMNS docks the
+        # readout at the right edge; without context_window nothing is added
+        tick_ctx = dict(tick, context_window={
+            "total_input_tokens": 76400, "total_output_tokens": 900,
+            "context_window_size": 200000, "used_percentage": 38,
+            "current_usage": {"input_tokens": 70000,
+                              "cache_read_input_tokens": 6400,
+                              "cache_creation_input_tokens": 0}})
+        r2 = subprocess.run([sys.executable, os.path.abspath(__file__)],
+                            input=json.dumps(tick_ctx),
+                            env=dict(env, COLUMNS="100"),
+                            capture_output=True, text=True, timeout=30)
+        check("tick_e2e_context_docked",
+              r2.returncode == 0 and "76.4k (38%)" in r2.stdout
+              and _visible_width(r2.stdout) == 100)
+        r3 = subprocess.run([sys.executable, os.path.abspath(__file__)],
+                            input=json.dumps(tick),
+                            env=dict(env, COLUMNS="100"),
+                            capture_output=True, text=True, timeout=30)
+        check("tick_e2e_no_context_untouched",
+              r3.returncode == 0 and "k (" not in r3.stdout
+              and _visible_width(r3.stdout) < 100)
 
         # ---- minimal style ----
         global _effort, AGENTS, _codex_active, CODEX_SESSIONS
@@ -1326,6 +1461,30 @@ def _demo():
             finally:
                 _load_json_from_probe = saved
         print()
+    # context readout: docked to the right edge when COLUMNS is known
+    # (Claude Code supplies it; here we borrow this terminal's width)
+    import shutil
+    os.environ["COLUMNS"] = str(shutil.get_terminal_size().columns)
+    print("[context] (docked right)")
+    cache = {"five_hour": {"used_percentage": 34, "observed_at": now,
+                           "present_in_latest_payload": True, "resets_at": now + 34 * 60},
+             "seven_day": {"used_percentage": 12, "observed_at": now,
+                           "present_in_latest_payload": True, "resets_at": now + 3000 * 60}}
+    cfg = {"statusline_style": "plain", "statusline_color": True}
+    _load_json_from_probe = lambda: {
+        "available": True, "snapshot_age_seconds": 5, "windows": {
+            "short": {"present": False},
+            "long": {"present": True, "routing_available": True,
+                     "used_percent": 15.0, "minutes_to_reset": 4000}}}
+    try:
+        line = _render(cache, cfg, now)
+        for pct, tok in ((24, 47800), (83, 166000), (96, 192000)):
+            pl = {"context_window": {"total_input_tokens": tok,
+                                     "used_percentage": pct,
+                                     "current_usage": {"input_tokens": tok}}}
+            print(_dock_right(line, _context_segment(pl, True)))
+    finally:
+        _load_json_from_probe = saved
     return 0
 
 

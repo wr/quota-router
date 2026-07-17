@@ -100,6 +100,14 @@ The always-on gauge styles (`statusline_style: braille`, `circles`, or
 Claude 5h ⣿88%!(34m) / 7d ⣧71% · Codex wk ⡄19%
 ```
 
+Every style also shows the session's context usage — `238.9k (24%)`, taken
+straight from the payload's `context_window` block — docked to the right
+edge of the row (Claude Code exports `COLUMNS` to statusline scripts since
+v2.1.153; without it the readout is appended as one more segment). Gray
+normally, yellow from 80%, red from 95% — display only, nothing routes on
+it. On ticks where Claude Code reports no usage (session start, right after
+`/compact`) the readout is omitted rather than shown as zero.
+
 Run `statusline.py --demo` to see the styles rendered in your own terminal.
 
 ## The routing policy, in short
