@@ -191,7 +191,12 @@ session to answer anything you left before continuing its task.
 
 - **Claude numbers come from the status-line payload.** Claude Code pushes
   `rate_limits` there on subscription plans; if yours doesn't, the Claude
-  side stays `--` and only the Codex half is useful.
+  side stays `--` and only the Codex half is useful. And an idle instance
+  repaints with the numbers from its *last API response*, so the cache
+  cross-checks window identity before accepting a tick: a payload whose
+  reset already passed is dropped, and used% can't go down within one
+  window (verified in the field — a stale repaint briefly showed 76% on a
+  window that was really at 18%).
 - **Codex numbers are as fresh as your last Codex run.** The probe reads
   rollout logs; it refuses to guess past a window reset, so after a few idle
   days Codex reads "unknown" even though it's probably sitting at 0%. One
