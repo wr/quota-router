@@ -33,6 +33,23 @@ CONFIG = os.path.join(ROUTER_DIR, "config.json")
 PROBE = os.path.join(ROUTER_DIR, "codex_quota_probe.py")
 HIBERNATE_MARKER = os.path.join(ROUTER_DIR, "hibernate.json")
 WATCHDOG = os.path.join(ROUTER_DIR, "hibernate_watchdog.py")
+CAPTURE_FLAG = os.path.join(ROUTER_DIR, ".capture-payload")
+CAPTURE_OUT = os.path.join(ROUTER_DIR, "payload-capture.json")
+
+
+def _maybe_capture_payload(raw):
+    """One-shot raw-payload dump for debugging the undocumented status format:
+    `touch .capture-payload`, wait a tick, read payload-capture.json. The flag
+    is consumed on capture so the dump can't grow or linger."""
+    try:
+        if not os.path.exists(CAPTURE_FLAG):
+            return
+        fd = os.open(CAPTURE_OUT, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(raw)
+        os.unlink(CAPTURE_FLAG)
+    except Exception:
+        pass  # diagnostics must never break the status line
 
 
 def _load_json(path, default):
@@ -183,6 +200,33 @@ def _paint(text, pct, thr, color_on):
     if pct >= thr - 10:
         return YELLOW + text + RESET
     return text
+
+
+def _fable_fraction(config):
+    """fable_weekly_fraction must be a number in (0, 1]; anything else
+    (missing, wrong type, out of range) falls back to the 0.5 default."""
+    v = config.get("fable_weekly_fraction", 0.5)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 < v <= 1):
+        return 0.5
+    return v
+
+
+def _fable_estimate(cache, config, now, ttl):
+    """Upper-bound estimate of Fable's weekly sub-limit usage, derived from
+    the 7d window (Fable's own weekly usage isn't in the status payload).
+    None when the plan flag is off or the 7d window is absent/stale — never
+    a number for unknown."""
+    if not config.get("fable_available_on_plan"):
+        return None
+    w = cache.get("seven_day") if isinstance(cache, dict) else None
+    if not isinstance(w, dict) or not isinstance(w.get("used_percentage"), (int, float)):
+        return None
+    stale = (not w.get("present_in_latest_payload", False)
+             and now - w.get("observed_at", 0) > ttl)
+    if stale:
+        return None
+    fraction = _fable_fraction(config)
+    return min(100, round(w["used_percentage"] / fraction, 1))
 
 
 def _fmt_codex(probe, now, old_secs, weekly_thr, five_thr, style="plain", color_on=False):
@@ -613,6 +657,12 @@ def _render_minimal(cache, config, now, payload):
         parts.append(c(GRAY, "codex") + " " + (pct_str(cx) if cx else "--"))
     else:
         parts.append(head_painted)
+
+    fable_est = _fable_estimate(cache, config, now, ttl)
+    if fable_est is not None and fable_est >= show_thr:
+        fable_thr = config.get("fable_weekly_protect_pct", 80)
+        parts.append(_paint(f"F≤{fable_est}%", fable_est, fable_thr, color_on))
+
     sid = payload.get("session_id") if isinstance(payload, dict) else None
     agents = _agents_segment(cache, now, effort, color_on, sid, cwd_raw)
     if agents:
@@ -652,7 +702,15 @@ def _render(cache, config, now, payload=None):
     probe = _load_json_from_probe()
     codex = _fmt_codex(probe, now, old_secs, weekly_thr, five_thr, style, color_on)
     prefix = "⏾ " if os.path.exists(HIBERNATE_MARKER) else ""
-    return f"{prefix}Claude 5h {five} / 7d {seven} · {codex}"
+
+    fable_seg = ""
+    fable_est = _fable_estimate(cache, config, now, ttl)
+    if fable_est is not None:
+        fable_thr = config.get("fable_weekly_protect_pct", 80)
+        text = _glyph(style, fable_est) + f"F≤{fable_est}%"
+        fable_seg = " / " + _paint(text, fable_est, fable_thr, color_on)
+
+    return f"{prefix}Claude 5h {five} / 7d {seven}{fable_seg} · {codex}"
 
 
 def _maybe_arm_hibernate(cache, config, now, payload):
@@ -804,6 +862,7 @@ def _dock_right(line, seg, margin=4):
 def main():
     now = time.time()
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    _maybe_capture_payload(raw)
     payload = _load_json_from_str(raw)
     config = _load_json(CONFIG, {})
     cache_dir = os.path.dirname(CACHE)
@@ -1247,6 +1306,45 @@ def _self_test():
             _load_json_from_probe = saved
             _effort = saved_eff
         check("minimal_no_far_countdown", "78%" in lw and "(" not in lw)
+
+        # ---- Fable weekly estimate segment (minimal style) ----
+        cfgm_fable = dict(cfgm, fable_available_on_plan=True)
+        fable_hi = {"seven_day": {"used_percentage": 40, "observed_at": now,
+                                  "present_in_latest_payload": True,
+                                  "resets_at": now + 500000}}
+        _load_json_from_probe = codex_low
+        try:
+            lf = _render(fable_hi, cfgm_fable, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("fable_segment_shown_above_threshold", "F≤80" in lf)  # 40/0.5=80 >= show_pct 75
+
+        fable_lo = {"seven_day": {"used_percentage": 30, "observed_at": now,
+                                  "present_in_latest_payload": True,
+                                  "resets_at": now + 500000}}
+        _load_json_from_probe = codex_low
+        try:
+            lf2 = _render(fable_lo, cfgm_fable, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("fable_segment_hidden_below_threshold", "F≤" not in lf2)  # 30/0.5=60 < 75
+
+        _load_json_from_probe = codex_low
+        try:
+            lf3 = _render(fable_hi, cfgm, now, payload)  # cfgm: fable_available_on_plan absent/false
+        finally:
+            _load_json_from_probe = saved
+        check("fable_segment_hidden_flag_false", "F≤" not in lf3)
+
+        fable_stale = {"seven_day": {"used_percentage": 40, "observed_at": now - 10000,
+                                     "present_in_latest_payload": False,
+                                     "resets_at": now + 500000}}
+        _load_json_from_probe = codex_low
+        try:
+            lf4 = _render(fable_stale, cfgm_fable, now, payload)
+        finally:
+            _load_json_from_probe = saved
+        check("fable_segment_hidden_stale", "F≤" not in lf4)
 
         # per-repo accent resolution: project settings beat global config
         proj = os.path.join(d, "proj")

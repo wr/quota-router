@@ -27,6 +27,14 @@ decomposition, judgment, review, and synthesis; delegate execution aggressively:
 - The question is rarely *whether* to delegate; it's *which provider and tier* — which
   is what the gates below answer.
 
+**When the orchestrator itself is Fable:** subagents launched through the Agent tool
+**inherit the parent model unless `model` is set explicitly** — an override-less launch
+from a Fable session runs the subagent on Fable and spends the Fable weekly sub-limit,
+which defeats the entire point of delegating. From a Fable main thread, every Agent call
+pins an explicit model from the tier table (sonnet / haiku / opus); a Fable-tier launch
+happens only for a frontier-class task that passes the full Fable gate. This is a hard
+rule, not a preference — treat an unpinned Agent call as a bug.
+
 ## Read the state
 
 1. Run `python3 ~/.claude/quota-router/codex_quota_probe.py` → Codex windows.
@@ -35,7 +43,13 @@ decomposition, judgment, review, and synthesis; delegate execution aggressively:
 3. Read `~/.claude/quota-router/config.json` → thresholds, `fable_available_on_plan`,
    `test_override`. If `test_override.expires_epoch` is in the future, use its values and
    label the decision **TEST**; ignore it if expired.
-4. **Freshness / unknown:** a Claude window is unknown if missing, or stale
+4. **Fable weekly estimate:** Fable has its own weekly sub-limit ≈ `fable_weekly_fraction`
+   (default 0.5) of the account's 7-day window, and it is **not exposed in the status
+   payload** — so estimate it: `fable_est = seven_day.used ÷ fable_weekly_fraction`,
+   capped at 100. This is a worst-case upper bound (it assumes all weekly usage was
+   Fable); that is the safe direction for a protect gate. No fresh seven_day → the
+   estimate is unknown, and unknown is not headroom.
+5. **Freshness / unknown:** a Claude window is unknown if missing, or stale
    (`present_in_latest_payload:false` AND age > `claude_cache_ttl_seconds`). A Codex window
    is unknown if `routing_available:false` (rolled-over/implausible) or the snapshot age >
    `codex_old_snapshot_seconds`. **Never treat unknown or rolled-over as 0% / headroom.**
@@ -90,6 +104,13 @@ For a candidate Claude tier with reserve `R`:
 **Reset proximity only decides wait-vs-switch — it never discounts the gate.** "Resets
 soon" = `minutes_to_reset ≤ max(20, 5% of window)`.
 
+- **Fable weekly gate:** `fable_est > fable_weekly_protect_pct` (default 80) →
+  **Fable-weekly-binding**. This can fire long before the account weekly gate does (at the
+  0.5 fraction it trips when raw 7d passes ~40%), and it binds *both directions*: no
+  Fable-tier subagent launches, and the orchestrator's own Fable turns are now the
+  scarcest resource — batch decisions, keep turns short, delegate everything executable,
+  and tell the user switching the main session to Opus (`/model`) would relieve it.
+
 **Conserve band:** `five_hour.used ≥ fivehour_conserve_pct` (default 50) → not yet
 constrained, but delegation *targets* shift: standard and mechanical work goes to Codex
 (or Haiku) by default, and Claude tiers above Haiku are reserved for tasks that need
@@ -131,9 +152,10 @@ as one tier more constrained than the snapshot alone suggests, especially before
 1. `fable_available_on_plan` is true.
 2. Task is frontier-class.
 3. Weekly is not binding.
-4. 5h is available.
-5. `five_hour.used + 12` still leaves 5h available.
-6. No Fable entitlement/limit error this session.
+4. **Fable weekly estimate is not binding** (`fable_est ≤ fable_weekly_protect_pct`).
+5. 5h is available.
+6. `five_hour.used + 12` still leaves 5h available.
+7. No Fable entitlement/limit error this session.
 
 A Fable entitlement error → mark Fable unavailable for the session, retry Opus immediately,
 do not re-probe entitlement.
