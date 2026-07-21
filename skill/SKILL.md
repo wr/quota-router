@@ -27,6 +27,11 @@ decomposition, judgment, review, and synthesis; delegate execution aggressively:
 - The question is rarely *whether* to delegate; it's *which provider and tier* — which
   is what the gates below answer.
 
+**Delegation is not quota-conditional.** The gates and bands below choose the *target* —
+provider, model, effort, fan-out. None of them decide *whether* to delegate; low usage is
+not a license to work inline. A Fable orchestrator at 5% of every window still delegates
+execution — its own turns are the most expensive spend on the account at any usage level.
+
 **When the orchestrator itself is Fable:** subagents launched through the Agent tool
 **inherit the parent model unless `model` is set explicitly** — an override-less launch
 from a Fable session runs the subagent on Fable and spends the Fable weekly sub-limit,

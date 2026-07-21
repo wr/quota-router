@@ -214,7 +214,9 @@ def build_context():
     meta = cache.get("meta") if isinstance(cache.get("meta"), dict) else {}
     if "fable" in str(meta.get("model") or "").lower():
         signals.append("ORCHESTRATOR IS FABLE: pin an explicit cheaper `model` on every Agent call — "
-                       "subagents inherit the parent model and spend the Fable sub-limit otherwise.")
+                       "subagents inherit the parent model and spend the Fable sub-limit otherwise. "
+                       "Delegate execution regardless of quota headroom; quota picks the target, "
+                       "never whether.")
     ov = cfg.get("test_override")
     if isinstance(ov, dict) and ov.get("expires_epoch", 0) > now:
         signals.append("NOTE: an active test_override is in effect — this is a TEST routing decision.")
