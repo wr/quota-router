@@ -98,14 +98,8 @@ The always-on gauge styles (`statusline_style: braille`, `circles`, or
 `plain`) show every window all the time instead:
 
 ```
-Claude 5h ⣿88%!(34m) / 7d ⣧71% / F≤100% · Codex wk ⡄19%
+Claude 5h ⣿88%!(34m) / 7d ⣧71% · Codex wk ⡄19%
 ```
-
-With `fable_available_on_plan` on, a `F≤94%` segment can also show up right
-after the 7-day number — Fable's own weekly sub-limit, estimated (see Config
-reference below). On `minimal`, it's gated by the same `statusline_show_pct`
-as everything else; on the always-on styles it just shows whenever the
-estimate exists, colored the same yellow/red way as the other windows.
 
 Every style also shows the session's context usage — `238.9k (24%)`, taken
 straight from the payload's `context_window` block — docked to the right
@@ -216,8 +210,9 @@ session to answer anything you left before continuing its task.
 
 Claude's Fable model has its own weekly sub-limit, and it's not exposed
 anywhere in the status payload — only `five_hour` and `seven_day` show up.
-So when `fable_available_on_plan` is on, both the statusline and the
-PreToolUse hook estimate it instead: 7-day usage divided by
+So when `fable_available_on_plan` is on, the PreToolUse hook estimates it
+instead (it deliberately stays out of the statusline — a worst-case ceiling
+parked at ~100% all week reads as a constant alarm): 7-day usage divided by
 `fable_weekly_fraction` (default 0.5, i.e. Fable's sub-limit is roughly half
 the account's 7-day window), capped at 100%. It's a worst-case number, not a
 reading — any non-Fable usage during the week inflates the estimate, which
